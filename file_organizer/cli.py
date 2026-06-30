@@ -8,7 +8,7 @@ from pathlib import Path
 from rich.console import Console
 
 from . import __version__
-from .organizer import organize, preview, undo
+from .organizer import OrganizeOptions, organize, preview, undo
 from .rules import load_rules
 
 
@@ -41,6 +41,30 @@ def build_parser() -> argparse.ArgumentParser:
             help="Path to a custom JSON rules config file.",
         )
 
+    def add_scan_options(sp: argparse.ArgumentParser) -> None:
+        sp.add_argument(
+            "-r",
+            "--recursive",
+            action="store_true",
+            help="Scan nested folders while skipping generated category folders.",
+        )
+        sp.add_argument(
+            "--partition-by-date",
+            action="store_true",
+            help="Partition destinations by file modified month, e.g. Images/2026-06/.",
+        )
+        sp.add_argument(
+            "--quarantine-unknown",
+            action="store_true",
+            help="Send unknown extensions to Quarantine instead of Other.",
+        )
+        sp.add_argument(
+            "--max-files",
+            type=int,
+            default=None,
+            help="Safety cap for the number of files processed in one run.",
+        )
+
     # organize
     sp_organize = subparsers.add_parser(
         "organize",
@@ -48,10 +72,17 @@ def build_parser() -> argparse.ArgumentParser:
         description="Move files in the target folder into category subfolders (Images, Documents, ...).",
     )
     add_common(sp_organize)
+    add_scan_options(sp_organize)
     sp_organize.add_argument(
         "--dry-run",
         action="store_true",
         help="Show what would happen without moving any files.",
+    )
+    sp_organize.add_argument(
+        "--json-log",
+        type=Path,
+        default=None,
+        help="Append JSONL audit events to this file.",
     )
 
     # preview
@@ -61,6 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Print a table of categories and the files that would go into each.",
     )
     add_common(sp_preview)
+    add_scan_options(sp_preview)
 
     # undo
     sp_undo = subparsers.add_parser(
@@ -91,10 +123,20 @@ def main(argv: list[str] | None = None) -> int:
 
         rules = load_rules(args.config.expanduser().resolve() if args.config else None)
 
+        options = OrganizeOptions(
+            recursive=getattr(args, "recursive", False),
+            partition_by_date=getattr(args, "partition_by_date", False),
+            quarantine_unknown=getattr(args, "quarantine_unknown", False),
+            json_log=args.json_log.expanduser().resolve() if getattr(args, "json_log", None) else None,
+            max_files=getattr(args, "max_files", None),
+        )
+        if options.max_files is not None and options.max_files < 1:
+            raise ValueError("--max-files must be greater than zero.")
+
         if args.command == "preview":
-            preview(folder, rules, console)
+            preview(folder, rules, console, options=options)
         elif args.command == "organize":
-            organize(folder, rules, console, dry_run=args.dry_run)
+            organize(folder, rules, console, dry_run=args.dry_run, options=options)
         else:
             parser.print_help()
             return 1

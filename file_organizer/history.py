@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
 HISTORY_FILENAME = ".organizer_history.json"
 
@@ -20,10 +20,17 @@ class HistoryManager:
         self.folder = folder
         self.history_path = folder / HISTORY_FILENAME
 
-    def save(self, moves: List[Tuple[Path, Path]]) -> None:
+    def save(
+        self,
+        moves: List[Tuple[Path, Path]],
+        metadata: dict[str, Any] | None = None,
+        errors: list[str] | None = None,
+    ) -> None:
         """Persist a list of (source, destination) moves."""
         payload = {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "metadata": metadata or {},
+            "errors": errors or [],
             "moves": [[str(src), str(dst)] for src, dst in moves],
         }
         with self.history_path.open("w", encoding="utf-8") as f:

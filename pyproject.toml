@@ -1,0 +1,16 @@
+[project]
+name = "smart-file-organiser"
+version = "2.0.0"
+description = "Operations-safe Python CLI for organizing files with preview, undo, recursive scans, quarantine, partitions, and JSONL audit logs."
+requires-python = ">=3.10"
+dependencies = ["rich>=13.0.0"]
+
+[project.scripts]
+file-organizer = "file_organizer.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0,<9"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
