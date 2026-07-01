@@ -1,7 +1,7 @@
 [project]
 name = "smart-file-organiser"
-version = "2.0.0"
-description = "Operations-safe Python CLI for organizing files with preview, undo, recursive scans, quarantine, partitions, and JSONL audit logs."
+version = "2.1.0"
+description = "Operations-safe Python CLI for organizing files with preview, undo, recursive scans, quarantine, partitions, duplicate detection, SQLite run logs, and JSONL audit logs."
 requires-python = ">=3.10"
 dependencies = ["rich>=13.0.0"]
 

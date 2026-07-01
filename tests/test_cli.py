@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 
@@ -78,3 +79,29 @@ def test_invalid_max_files_is_rejected(tmp_path: Path):
     result = main(["preview", str(tmp_path), "--max-files", "0"])
 
     assert result == 1
+
+
+def test_dedupe_routes_duplicate_checksum_and_records_history(tmp_path: Path):
+    first = write(tmp_path / "first.txt", "same")
+    second = write(tmp_path / "second.txt", "same")
+    db_path = tmp_path / ".runs.sqlite3"
+
+    result = main(["organize", str(tmp_path), "--dedupe", "--db", str(db_path)])
+
+    assert result == 0
+    assert (tmp_path / "Documents" / first.name).exists()
+    assert (tmp_path / "Duplicates" / second.name).exists()
+    with sqlite3.connect(db_path) as connection:
+        row = connection.execute("SELECT planned, moved, errors FROM runs").fetchone()
+    assert row == (2, 2, 0)
+
+
+def test_history_command_reads_sqlite_runlog(tmp_path: Path):
+    write(tmp_path / "report.pdf")
+    db_path = tmp_path / ".runs.sqlite3"
+
+    organize_result = main(["organize", str(tmp_path), "--db", str(db_path)])
+    history_result = main(["history", str(tmp_path), "--db", str(db_path), "--limit", "5"])
+
+    assert organize_result == 0
+    assert history_result == 0

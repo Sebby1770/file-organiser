@@ -29,3 +29,5 @@ htmlcov/
 
 # Organizer history files
 .organizer_history.json
+.organizer_runs.sqlite3
+.organizer_runs.sqlite3-*

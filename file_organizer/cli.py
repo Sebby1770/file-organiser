@@ -6,9 +6,11 @@ import sys
 from pathlib import Path
 
 from rich.console import Console
+from rich.table import Table
 
 from . import __version__
 from .organizer import OrganizeOptions, organize, preview, undo
+from .runlog import RunLog
 from .rules import load_rules
 
 
@@ -59,6 +61,11 @@ def build_parser() -> argparse.ArgumentParser:
             help="Send unknown extensions to Quarantine instead of Other.",
         )
         sp.add_argument(
+            "--dedupe",
+            action="store_true",
+            help="Hash files and route duplicates to a Duplicates folder.",
+        )
+        sp.add_argument(
             "--max-files",
             type=int,
             default=None,
@@ -84,6 +91,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Append JSONL audit events to this file.",
     )
+    sp_organize.add_argument(
+        "--db",
+        type=Path,
+        default=None,
+        help="SQLite run-log database path. Defaults to .organizer_runs.sqlite3 in the target folder.",
+    )
 
     # preview
     sp_preview = subparsers.add_parser(
@@ -106,6 +119,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the folder that was previously organized.",
     )
 
+    sp_history = subparsers.add_parser(
+        "history",
+        help="Show recent organize runs from the embedded SQLite run log.",
+        description="Read the SQLite run log and print recent run metadata.",
+    )
+    sp_history.add_argument("folder", type=Path, help="Path to the organized folder.")
+    sp_history.add_argument("--limit", type=int, default=10, help="Number of runs to show.")
+    sp_history.add_argument("--db", type=Path, default=None, help="SQLite run-log database path.")
+
     return parser
 
 
@@ -121,13 +143,42 @@ def main(argv: list[str] | None = None) -> int:
             undo(folder, console)
             return 0
 
+        if args.command == "history":
+            if args.limit < 1:
+                raise ValueError("--limit must be greater than zero.")
+            db_path = args.db.expanduser().resolve() if args.db else None
+            rows = RunLog(folder, db_path).recent(limit=args.limit)
+            table = Table(title=f"Organizer history: {folder}", header_style="bold cyan")
+            table.add_column("ID", justify="right")
+            table.add_column("Created")
+            table.add_column("Mode")
+            table.add_column("Planned", justify="right")
+            table.add_column("Moved", justify="right")
+            table.add_column("Errors", justify="right")
+            table.add_column("Files/s", justify="right")
+            for row in rows:
+                rate = row["moved"] / max(0.001, row["duration_seconds"])
+                table.add_row(
+                    str(row["id"]),
+                    row["created_at"],
+                    "dry-run" if row["dry_run"] else row["command"],
+                    str(row["planned"]),
+                    str(row["moved"]),
+                    str(row["errors"]),
+                    f"{rate:.2f}",
+                )
+            console.print(table)
+            return 0
+
         rules = load_rules(args.config.expanduser().resolve() if args.config else None)
 
         options = OrganizeOptions(
             recursive=getattr(args, "recursive", False),
             partition_by_date=getattr(args, "partition_by_date", False),
             quarantine_unknown=getattr(args, "quarantine_unknown", False),
+            dedupe=getattr(args, "dedupe", False),
             json_log=args.json_log.expanduser().resolve() if getattr(args, "json_log", None) else None,
+            db_path=args.db.expanduser().resolve() if getattr(args, "db", None) else None,
             max_files=getattr(args, "max_files", None),
         )
         if options.max_files is not None and options.max_files < 1:

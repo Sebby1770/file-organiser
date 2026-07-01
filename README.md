@@ -2,7 +2,7 @@
 
 A clean Python command-line tool that automatically sorts files in a folder by type: images, documents, videos, code, and more. Built with `argparse` and [Rich](https://github.com/Textualize/rich) for colorful output and progress bars.
 
-The refresh turns the project into a more operations-safe organiser: proper package layout, recursive scans, date partitioning, quarantine mode, JSONL audit logs, max-file safety limits, tests, packaging metadata, CI, and a changelog.
+The refresh turns the project into a more operations-safe organiser: proper package layout, recursive scans, date partitioning, quarantine mode, duplicate detection, SQLite run history, JSONL audit logs, max-file safety limits, tests, packaging metadata, CI, and a changelog.
 
 ## Features
 
@@ -15,7 +15,9 @@ The refresh turns the project into a more operations-safe organiser: proper pack
 - Recursive mode with generated-folder protection
 - Date partitioning into paths like `Images/2026-06/photo.jpg`
 - Quarantine mode for unknown extensions
+- Checksum-based duplicate routing into `Duplicates/`
 - JSONL audit logs for moves, dry runs, and errors
+- Embedded SQLite run history with throughput reporting
 - Max-file guardrails for safer large-folder runs
 
 ## Installation
@@ -78,10 +80,29 @@ Quarantine unknown extensions:
 python main.py organize ~/Downloads --quarantine-unknown
 ```
 
+Route duplicate file contents:
+
+```bash
+python main.py organize ~/Downloads --dedupe
+```
+
 Write a JSONL audit log:
 
 ```bash
 python main.py organize ~/Downloads --json-log ~/Downloads/.organizer-events.jsonl
+```
+
+Show historical runs:
+
+```bash
+python main.py history ~/Downloads
+```
+
+Run in Docker:
+
+```bash
+docker build -t smart-file-organiser .
+docker run --rm -v "$PWD:/work" smart-file-organiser preview /work
 ```
 
 Limit a large run:

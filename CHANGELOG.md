@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.0 - 2026-07-01
+
+- Added an embedded SQLite run log with a new `history` command.
+- Added throughput reporting for organize and dry-run operations.
+- Added checksum-based duplicate detection with `--dedupe`, routing repeat content into `Duplicates/`.
+- Added run-log database options and tests for duplicate routing and historical run queries.
+- Added a Dockerfile and CI container build for repeatable CLI execution.
+
 ## 2.0.0 - 2026-06-30
 
 - Fixed the package layout so `python main.py ...` and the `file-organizer` console script both resolve the real package.

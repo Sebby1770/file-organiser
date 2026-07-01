@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import shutil
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
+from hashlib import sha256
 import json
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
@@ -21,9 +23,11 @@ from rich.progress import (
 from rich.table import Table
 
 from .history import HISTORY_FILENAME, HistoryManager
+from .runlog import RunLog
 from .rules import OTHER_CATEGORY, category_for_extension
 
 QUARANTINE_CATEGORY = "Quarantine"
+DUPLICATES_CATEGORY = "Duplicates"
 
 
 @dataclass(frozen=True)
@@ -31,7 +35,9 @@ class OrganizeOptions:
     recursive: bool = False
     partition_by_date: bool = False
     quarantine_unknown: bool = False
+    dedupe: bool = False
     json_log: Path | None = None
+    db_path: Path | None = None
     max_files: int | None = None
 
 
@@ -40,11 +46,12 @@ class PlannedMove:
     source: Path
     category: str
     target_dir: Path
+    checksum: str | None = None
 
 
 def _iter_candidate_files(folder: Path, rules: Dict[str, List[str]], recursive: bool) -> Iterable[Path]:
     entries = folder.rglob("*") if recursive else folder.iterdir()
-    generated_dirs = set(rules.keys()) | {OTHER_CATEGORY, QUARANTINE_CATEGORY}
+    generated_dirs = set(rules.keys()) | {OTHER_CATEGORY, QUARANTINE_CATEGORY, DUPLICATES_CATEGORY}
 
     for entry in entries:
         if not entry.is_file():
@@ -63,20 +70,36 @@ def _partition_for_file(src: Path) -> str:
     return datetime.fromtimestamp(src.stat().st_mtime).strftime("%Y-%m")
 
 
+def _file_checksum(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _scan_folder(folder: Path, rules: Dict[str, List[str]], options: OrganizeOptions) -> List[PlannedMove]:
     """Build a list of planned file moves."""
     planned: List[PlannedMove] = []
+    seen_checksums: set[str] = set()
 
     for entry in _iter_candidate_files(folder, rules, options.recursive):
         if options.json_log and entry.resolve() == options.json_log.resolve():
             continue
+        if options.db_path and entry.resolve() == options.db_path.resolve():
+            continue
+        checksum = _file_checksum(entry) if options.dedupe else None
         category = category_for_extension(entry.suffix, rules)
+        if checksum and checksum in seen_checksums:
+            category = DUPLICATES_CATEGORY
+        elif checksum:
+            seen_checksums.add(checksum)
         if options.quarantine_unknown and category == OTHER_CATEGORY:
             category = QUARANTINE_CATEGORY
         target_dir = folder / category
         if options.partition_by_date:
             target_dir = target_dir / _partition_for_file(entry)
-        planned.append(PlannedMove(entry, category, target_dir))
+        planned.append(PlannedMove(entry, category, target_dir, checksum))
 
         if options.max_files is not None and len(planned) >= options.max_files:
             break
@@ -177,6 +200,7 @@ def organize(
 ) -> None:
     """Move files into category subfolders. Use dry_run to simulate."""
     options = options or OrganizeOptions()
+    started_at = time.perf_counter()
     if not folder.exists() or not folder.is_dir():
         console.print(f"[red]Error:[/red] '{folder}' is not a valid directory.")
         return
@@ -221,14 +245,26 @@ def organize(
                     progress.console.log(f"[dim]would move[/dim] {src} -> {target_dir.relative_to(folder)}/")
                     _write_json_event(
                         options.json_log,
-                        {"event": "dry_run_move", "source": src, "destination": dest, "category": planned_move.category},
+                        {
+                            "event": "dry_run_move",
+                            "source": src,
+                            "destination": dest,
+                            "category": planned_move.category,
+                            "checksum": planned_move.checksum,
+                        },
                     )
                 else:
                     shutil.move(str(src), str(dest))
                     moves.append((dest, src))  # (current_location, original_location)
                     _write_json_event(
                         options.json_log,
-                        {"event": "move", "source": src, "destination": dest, "category": planned_move.category},
+                        {
+                            "event": "move",
+                            "source": src,
+                            "destination": dest,
+                            "category": planned_move.category,
+                            "checksum": planned_move.checksum,
+                        },
                     )
             except (OSError, shutil.Error) as e:
                 message = f"Failed to move {src.name}: {e}"
@@ -244,12 +280,32 @@ def organize(
                 "recursive": options.recursive,
                 "partition_by_date": options.partition_by_date,
                 "quarantine_unknown": options.quarantine_unknown,
+                "dedupe": options.dedupe,
             },
             errors=errors,
         )
         console.print(f"[green]✓[/green] Organized {len(moves)} file(s). Run [bold]undo[/bold] to revert.")
     elif dry_run:
         console.print("[yellow]Dry run complete.[/yellow] No files were moved.")
+
+    duration = max(0.001, time.perf_counter() - started_at)
+    moved_count = len(moves) if not dry_run else total
+    throughput = moved_count / duration
+    console.print(f"[bold]Throughput:[/bold] {throughput:.2f} file(s)/second over {duration:.2f}s")
+    RunLog(folder, options.db_path).record(
+        command="organize",
+        dry_run=dry_run,
+        planned=total,
+        moved=moved_count,
+        errors=len(errors),
+        duration_seconds=duration,
+        metadata={
+            "recursive": options.recursive,
+            "partition_by_date": options.partition_by_date,
+            "quarantine_unknown": options.quarantine_unknown,
+            "dedupe": options.dedupe,
+        },
+    )
 
     if errors:
         console.print(f"[red]Encountered {len(errors)} error(s):[/red]")
