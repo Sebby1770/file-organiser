@@ -127,6 +127,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Write the manifest JSON to this path instead of stdout.",
     )
+    sp_manifest.add_argument(
+        "--supabase-sync",
+        action="store_true",
+        help="Upload the generated manifest to Supabase using backend-only env vars.",
+    )
+    sp_manifest.add_argument(
+        "--supabase-table",
+        default=None,
+        help="Supabase table name for manifest sync. Defaults to SUPABASE_MANIFEST_TABLE or organizer_manifests.",
+    )
 
     # undo
     sp_undo = subparsers.add_parser(
@@ -217,6 +227,8 @@ def main(argv: list[str] | None = None) -> int:
                 console,
                 options=options,
                 output=args.output.expanduser().resolve() if args.output else None,
+                sync_supabase=args.supabase_sync,
+                supabase_table=args.supabase_table,
             )
         elif args.command == "organize":
             organize(folder, rules, console, dry_run=args.dry_run, options=options)

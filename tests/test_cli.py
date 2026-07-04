@@ -120,6 +120,63 @@ def test_manifest_command_writes_inventory(tmp_path: Path):
     assert payload["files"][0]["checksum"]
 
 
+def test_manifest_supabase_sync_posts_inventory(tmp_path: Path, monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        status = 201
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    def fake_urlopen(request, timeout):
+        calls.append((request, timeout))
+        return FakeResponse()
+
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setenv("SUPABASE_TIMEOUT_SECONDS", "2")
+    monkeypatch.setattr("file_organizer.organizer.urlopen", fake_urlopen)
+    write(tmp_path / "photo.jpg", "image")
+    output = tmp_path / "manifest.json"
+
+    result = main(
+        [
+            "manifest",
+            str(tmp_path),
+            "--output",
+            str(output),
+            "--supabase-sync",
+            "--supabase-table",
+            "organizer_manifests",
+        ]
+    )
+
+    assert result == 0
+    assert len(calls) == 1
+    request, timeout = calls[0]
+    body = json.loads(request.data.decode("utf-8"))
+    assert request.full_url == "https://example.supabase.co/rest/v1/organizer_manifests"
+    assert timeout == 2
+    assert body["file_count"] == 1
+    assert body["category_counts"]["Images"] == 1
+    assert body["manifest"]["files"][0]["category"] == "Images"
+
+
+def test_manifest_supabase_sync_requires_backend_env(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SECRET_KEY", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    write(tmp_path / "photo.jpg", "image")
+
+    result = main(["manifest", str(tmp_path), "--supabase-sync"])
+
+    assert result == 1
+
+
 def test_min_age_skips_recent_files(tmp_path: Path):
     source = write(tmp_path / "fresh.txt")
 

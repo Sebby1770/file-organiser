@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.0 - 2026-07-04
+
+- Added explicit `manifest --supabase-sync` support for uploading generated inventory manifests with backend-only Supabase keys.
+- Added Supabase migration SQL, `.env.example`, table override support, and tests for sync payloads and missing env handling.
+- Bumped package metadata to `2.3.0`.
+
 ## 2.2.0 - 2026-07-04
 
 - Added a `manifest` command that emits JSON inventory data with planned targets, categories, sizes, mtimes, and optional checksums.

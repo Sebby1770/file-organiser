@@ -2,11 +2,11 @@
 
 A clean Python command-line tool that automatically sorts files in a folder by type: images, documents, videos, code, and more. Built with `argparse` and [Rich](https://github.com/Textualize/rich) for colorful output and progress bars.
 
-The refresh turns the project into a more operations-safe organiser: proper package layout, recursive scans, JSON manifests, date partitioning, quarantine mode, duplicate detection, SQLite run history, JSONL audit logs, max-file and min-age safety limits, tests, packaging metadata, CI, and a changelog.
+The refresh turns the project into a more operations-safe organiser: proper package layout, recursive scans, JSON manifests, optional Supabase manifest sync, date partitioning, quarantine mode, duplicate detection, SQLite run history, JSONL audit logs, max-file and min-age safety limits, tests, packaging metadata, CI, and a changelog.
 
 ## Features
 
-- Three commands: `organize`, `preview`, `undo`
+- Commands for `organize`, `preview`, `manifest`, `history`, and `undo`
 - Colored terminal output with tables and progress bars
 - Dry-run mode to see what would happen without touching files
 - Custom rules via a simple JSON config file
@@ -17,6 +17,7 @@ The refresh turns the project into a more operations-safe organiser: proper pack
 - Quarantine mode for unknown extensions
 - Checksum-based duplicate routing into `Duplicates/`
 - JSON inventory manifests before moving files
+- Optional backend-key Supabase sync for generated manifests
 - JSONL audit logs for moves, dry runs, and errors
 - Embedded SQLite run history with throughput reporting
 - Max-file guardrails for safer large-folder runs
@@ -94,6 +95,14 @@ Create an inventory manifest:
 python main.py manifest ~/Downloads --dedupe --output ~/Downloads/manifest.json
 ```
 
+Sync a manifest to Supabase:
+
+```bash
+SUPABASE_URL=https://your-project.supabase.co \
+SUPABASE_SECRET_KEY=sb_secret_... \
+python main.py manifest ~/Downloads --output ~/Downloads/manifest.json --supabase-sync
+```
+
 Skip files modified in the last minute:
 
 ```bash
@@ -151,6 +160,10 @@ A rules file is a JSON object mapping category names to lists of file extensions
 
 Extensions are case-insensitive, and the leading dot is optional. Anything that does not match a rule goes into `Other/`, or `Quarantine/` when `--quarantine-unknown` is enabled.
 
+## Supabase Manifests
+
+Manifest sync is explicit because inventory files can contain sensitive local paths. Apply the SQL in `supabase/migrations`, set `SUPABASE_URL` and `SUPABASE_SECRET_KEY`, then pass `--supabase-sync` to the `manifest` command. The default table is `organizer_manifests`, or override it with `--supabase-table` / `SUPABASE_MANIFEST_TABLE`.
+
 ## Project Structure
 
 ```text
@@ -161,6 +174,7 @@ file-organiser/
 |-- README.md
 |-- CHANGELOG.md
 |-- rules.example.json
+|-- supabase/migrations/
 |-- tests/
 `-- file_organizer/
     |-- __init__.py

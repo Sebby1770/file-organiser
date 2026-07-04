@@ -1,6 +1,7 @@
 """Core logic for scanning, organizing, previewing, and undoing."""
 from __future__ import annotations
 
+import os
 import shutil
 import time
 from collections import defaultdict
@@ -10,6 +11,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
+from urllib.request import Request, urlopen
 
 from rich.console import Console
 from rich.progress import (
@@ -142,12 +144,51 @@ def build_manifest(folder: Path, rules: Dict[str, List[str]], options: OrganizeO
     }
 
 
+def _clean_supabase_table(value: str | None) -> str:
+    cleaned = "".join(character for character in str(value or "") if character.isalnum() or character == "_")
+    return cleaned or "organizer_manifests"
+
+
+def sync_manifest_to_supabase(payload: dict, table: str | None = None) -> dict:
+    supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
+    secret_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or ""
+    if not supabase_url or not secret_key:
+        raise ValueError("Set SUPABASE_URL and SUPABASE_SECRET_KEY before using --supabase-sync.")
+
+    table_name = _clean_supabase_table(table or os.getenv("SUPABASE_MANIFEST_TABLE", "organizer_manifests"))
+    body = {
+        "source": "file-organizer-cli",
+        "root": payload["root"],
+        "file_count": payload["total_files"],
+        "category_counts": payload["categories"],
+        "manifest": payload,
+    }
+    request = Request(
+        f"{supabase_url}/rest/v1/{table_name}",
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={
+            "apikey": secret_key,
+            "Authorization": f"Bearer {secret_key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+        },
+    )
+    with urlopen(request, timeout=float(os.getenv("SUPABASE_TIMEOUT_SECONDS", "10"))) as response:
+        status = int(getattr(response, "status", 201))
+        if status >= 400:
+            raise RuntimeError(f"Supabase REST API returned HTTP {status}")
+    return {"ok": True, "table": table_name, "file_count": payload["total_files"]}
+
+
 def manifest(
     folder: Path,
     rules: Dict[str, List[str]],
     console: Console,
     options: OrganizeOptions | None = None,
     output: Path | None = None,
+    sync_supabase: bool = False,
+    supabase_table: str | None = None,
 ) -> None:
     options = options or OrganizeOptions()
     if not folder.exists() or not folder.is_dir():
@@ -161,6 +202,13 @@ def manifest(
         console.print(f"[green]✓[/green] Wrote manifest for {payload['total_files']} file(s) to [cyan]{output}[/cyan]")
     else:
         console.print(json.dumps(payload, indent=2))
+
+    if sync_supabase:
+        result = sync_manifest_to_supabase(payload, supabase_table)
+        console.print(
+            f"[green]✓[/green] Synced manifest for {result['file_count']} file(s) "
+            f"to Supabase table [cyan]{result['table']}[/cyan]"
+        )
 
 
 def _unique_destination(dest: Path) -> Path:
