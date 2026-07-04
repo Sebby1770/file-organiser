@@ -105,3 +105,26 @@ def test_history_command_reads_sqlite_runlog(tmp_path: Path):
 
     assert organize_result == 0
     assert history_result == 0
+
+
+def test_manifest_command_writes_inventory(tmp_path: Path):
+    write(tmp_path / "photo.jpg", "image")
+    output = tmp_path / "manifest.json"
+
+    result = main(["manifest", str(tmp_path), "--dedupe", "--output", str(output)])
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert result == 0
+    assert payload["total_files"] == 1
+    assert payload["files"][0]["category"] == "Images"
+    assert payload["files"][0]["checksum"]
+
+
+def test_min_age_skips_recent_files(tmp_path: Path):
+    source = write(tmp_path / "fresh.txt")
+
+    result = main(["organize", str(tmp_path), "--min-age-seconds", "3600"])
+
+    assert result == 0
+    assert source.exists()
+    assert not (tmp_path / "Documents").exists()

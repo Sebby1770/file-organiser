@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.table import Table
 
 from . import __version__
-from .organizer import OrganizeOptions, organize, preview, undo
+from .organizer import OrganizeOptions, manifest, organize, preview, undo
 from .runlog import RunLog
 from .rules import load_rules
 
@@ -71,6 +71,12 @@ def build_parser() -> argparse.ArgumentParser:
             default=None,
             help="Safety cap for the number of files processed in one run.",
         )
+        sp.add_argument(
+            "--min-age-seconds",
+            type=int,
+            default=0,
+            help="Skip files modified more recently than this many seconds.",
+        )
 
     # organize
     sp_organize = subparsers.add_parser(
@@ -106,6 +112,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_common(sp_preview)
     add_scan_options(sp_preview)
+
+    sp_manifest = subparsers.add_parser(
+        "manifest",
+        help="Create a JSON inventory of planned file moves.",
+        description="Scan files and output a JSON manifest with categories, targets, sizes, mtimes, and optional checksums.",
+    )
+    add_common(sp_manifest)
+    add_scan_options(sp_manifest)
+    sp_manifest.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        help="Write the manifest JSON to this path instead of stdout.",
+    )
 
     # undo
     sp_undo = subparsers.add_parser(
@@ -180,12 +201,23 @@ def main(argv: list[str] | None = None) -> int:
             json_log=args.json_log.expanduser().resolve() if getattr(args, "json_log", None) else None,
             db_path=args.db.expanduser().resolve() if getattr(args, "db", None) else None,
             max_files=getattr(args, "max_files", None),
+            min_age_seconds=getattr(args, "min_age_seconds", 0),
         )
         if options.max_files is not None and options.max_files < 1:
             raise ValueError("--max-files must be greater than zero.")
+        if options.min_age_seconds < 0:
+            raise ValueError("--min-age-seconds cannot be negative.")
 
         if args.command == "preview":
             preview(folder, rules, console, options=options)
+        elif args.command == "manifest":
+            manifest(
+                folder,
+                rules,
+                console,
+                options=options,
+                output=args.output.expanduser().resolve() if args.output else None,
+            )
         elif args.command == "organize":
             organize(folder, rules, console, dry_run=args.dry_run, options=options)
         else:

@@ -39,6 +39,7 @@ class OrganizeOptions:
     json_log: Path | None = None
     db_path: Path | None = None
     max_files: int | None = None
+    min_age_seconds: int = 0
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,8 @@ def _scan_folder(folder: Path, rules: Dict[str, List[str]], options: OrganizeOpt
             continue
         if options.db_path and entry.resolve() == options.db_path.resolve():
             continue
+        if options.min_age_seconds > 0 and time.time() - entry.stat().st_mtime < options.min_age_seconds:
+            continue
         checksum = _file_checksum(entry) if options.dedupe else None
         category = category_for_extension(entry.suffix, rules)
         if checksum and checksum in seen_checksums:
@@ -105,6 +108,59 @@ def _scan_folder(folder: Path, rules: Dict[str, List[str]], options: OrganizeOpt
             break
 
     return planned
+
+
+def build_manifest(folder: Path, rules: Dict[str, List[str]], options: OrganizeOptions) -> dict:
+    planned = _scan_folder(folder, rules, options)
+    files = []
+    for move in planned:
+        stat = move.source.stat()
+        files.append(
+            {
+                "source": str(move.source),
+                "target": str((move.target_dir / move.source.name)),
+                "category": move.category,
+                "size_bytes": stat.st_size,
+                "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+                "checksum": move.checksum,
+            }
+        )
+    grouped = _group_planned(planned)
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "root": str(folder),
+        "total_files": len(files),
+        "categories": {category: len(items) for category, items in sorted(grouped.items())},
+        "options": {
+            "recursive": options.recursive,
+            "partition_by_date": options.partition_by_date,
+            "quarantine_unknown": options.quarantine_unknown,
+            "dedupe": options.dedupe,
+            "min_age_seconds": options.min_age_seconds,
+        },
+        "files": files,
+    }
+
+
+def manifest(
+    folder: Path,
+    rules: Dict[str, List[str]],
+    console: Console,
+    options: OrganizeOptions | None = None,
+    output: Path | None = None,
+) -> None:
+    options = options or OrganizeOptions()
+    if not folder.exists() or not folder.is_dir():
+        console.print(f"[red]Error:[/red] '{folder}' is not a valid directory.")
+        return
+
+    payload = build_manifest(folder, rules, options)
+    if output:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        console.print(f"[green]✓[/green] Wrote manifest for {payload['total_files']} file(s) to [cyan]{output}[/cyan]")
+    else:
+        console.print(json.dumps(payload, indent=2))
 
 
 def _unique_destination(dest: Path) -> Path:

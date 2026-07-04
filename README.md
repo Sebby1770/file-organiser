@@ -2,7 +2,7 @@
 
 A clean Python command-line tool that automatically sorts files in a folder by type: images, documents, videos, code, and more. Built with `argparse` and [Rich](https://github.com/Textualize/rich) for colorful output and progress bars.
 
-The refresh turns the project into a more operations-safe organiser: proper package layout, recursive scans, date partitioning, quarantine mode, duplicate detection, SQLite run history, JSONL audit logs, max-file safety limits, tests, packaging metadata, CI, and a changelog.
+The refresh turns the project into a more operations-safe organiser: proper package layout, recursive scans, JSON manifests, date partitioning, quarantine mode, duplicate detection, SQLite run history, JSONL audit logs, max-file and min-age safety limits, tests, packaging metadata, CI, and a changelog.
 
 ## Features
 
@@ -16,9 +16,11 @@ The refresh turns the project into a more operations-safe organiser: proper pack
 - Date partitioning into paths like `Images/2026-06/photo.jpg`
 - Quarantine mode for unknown extensions
 - Checksum-based duplicate routing into `Duplicates/`
+- JSON inventory manifests before moving files
 - JSONL audit logs for moves, dry runs, and errors
 - Embedded SQLite run history with throughput reporting
 - Max-file guardrails for safer large-folder runs
+- Min-age guardrails to avoid files still being downloaded
 
 ## Installation
 
@@ -84,6 +86,18 @@ Route duplicate file contents:
 
 ```bash
 python main.py organize ~/Downloads --dedupe
+```
+
+Create an inventory manifest:
+
+```bash
+python main.py manifest ~/Downloads --dedupe --output ~/Downloads/manifest.json
+```
+
+Skip files modified in the last minute:
+
+```bash
+python main.py organize ~/Downloads --min-age-seconds 60
 ```
 
 Write a JSONL audit log:

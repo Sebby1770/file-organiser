@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.2.0 - 2026-07-04
+
+- Added a `manifest` command that emits JSON inventory data with planned targets, categories, sizes, mtimes, and optional checksums.
+- Added `--min-age-seconds` to avoid moving files that may still be downloading or actively written.
+- Added tests for manifest generation and recent-file safety skipping.
+
 ## 2.1.0 - 2026-07-01
 
 - Added an embedded SQLite run log with a new `history` command.
