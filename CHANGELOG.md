@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.4.0 - 2026-07-04
+
+- Added `--redact-paths` for manifests so Supabase uploads can avoid absolute local paths.
+- Added `total_bytes`, `category_bytes`, and `root_hash` to manifest output.
+- Added tests for redacted manifests and redacted Supabase sync payloads.
+- Bumped package metadata to `2.4.0`.
+
 ## 2.3.0 - 2026-07-04
 
 - Added explicit `manifest --supabase-sync` support for uploading generated inventory manifests with backend-only Supabase keys.

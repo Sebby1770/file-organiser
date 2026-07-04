@@ -77,6 +77,11 @@ def build_parser() -> argparse.ArgumentParser:
             default=0,
             help="Skip files modified more recently than this many seconds.",
         )
+        sp.add_argument(
+            "--redact-paths",
+            action="store_true",
+            help="Use relative paths and a root hash in manifest output instead of absolute local paths.",
+        )
 
     # organize
     sp_organize = subparsers.add_parser(
@@ -212,6 +217,7 @@ def main(argv: list[str] | None = None) -> int:
             db_path=args.db.expanduser().resolve() if getattr(args, "db", None) else None,
             max_files=getattr(args, "max_files", None),
             min_age_seconds=getattr(args, "min_age_seconds", 0),
+            redact_paths=getattr(args, "redact_paths", False),
         )
         if options.max_files is not None and options.max_files < 1:
             raise ValueError("--max-files must be greater than zero.")

@@ -4,6 +4,7 @@ create table if not exists public.organizer_manifests (
   source text not null default 'file-organizer-cli',
   root text not null,
   file_count integer not null check (file_count >= 0),
+  total_bytes bigint not null default 0 check (total_bytes >= 0),
   category_counts jsonb not null default '{}'::jsonb,
   manifest jsonb not null
 );

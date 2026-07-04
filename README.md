@@ -2,7 +2,7 @@
 
 A clean Python command-line tool that automatically sorts files in a folder by type: images, documents, videos, code, and more. Built with `argparse` and [Rich](https://github.com/Textualize/rich) for colorful output and progress bars.
 
-The refresh turns the project into a more operations-safe organiser: proper package layout, recursive scans, JSON manifests, optional Supabase manifest sync, date partitioning, quarantine mode, duplicate detection, SQLite run history, JSONL audit logs, max-file and min-age safety limits, tests, packaging metadata, CI, and a changelog.
+The refresh turns the project into a more operations-safe organiser: proper package layout, recursive scans, JSON manifests with optional path redaction, optional Supabase manifest sync, date partitioning, quarantine mode, duplicate detection, SQLite run history, JSONL audit logs, max-file and min-age safety limits, tests, packaging metadata, CI, and a changelog.
 
 ## Features
 
@@ -17,6 +17,7 @@ The refresh turns the project into a more operations-safe organiser: proper pack
 - Quarantine mode for unknown extensions
 - Checksum-based duplicate routing into `Duplicates/`
 - JSON inventory manifests before moving files
+- Optional manifest path redaction with total byte and category byte summaries
 - Optional backend-key Supabase sync for generated manifests
 - JSONL audit logs for moves, dry runs, and errors
 - Embedded SQLite run history with throughput reporting
@@ -95,12 +96,18 @@ Create an inventory manifest:
 python main.py manifest ~/Downloads --dedupe --output ~/Downloads/manifest.json
 ```
 
+Create a redacted inventory manifest:
+
+```bash
+python main.py manifest ~/Downloads --recursive --redact-paths --output ~/Downloads/manifest.json
+```
+
 Sync a manifest to Supabase:
 
 ```bash
 SUPABASE_URL=https://your-project.supabase.co \
 SUPABASE_SECRET_KEY=sb_secret_... \
-python main.py manifest ~/Downloads --output ~/Downloads/manifest.json --supabase-sync
+python main.py manifest ~/Downloads --redact-paths --output ~/Downloads/manifest.json --supabase-sync
 ```
 
 Skip files modified in the last minute:
@@ -162,7 +169,7 @@ Extensions are case-insensitive, and the leading dot is optional. Anything that 
 
 ## Supabase Manifests
 
-Manifest sync is explicit because inventory files can contain sensitive local paths. Apply the SQL in `supabase/migrations`, set `SUPABASE_URL` and `SUPABASE_SECRET_KEY`, then pass `--supabase-sync` to the `manifest` command. The default table is `organizer_manifests`, or override it with `--supabase-table` / `SUPABASE_MANIFEST_TABLE`.
+Manifest sync is explicit because inventory files can contain sensitive local paths. Apply the SQL in `supabase/migrations`, set `SUPABASE_URL` and `SUPABASE_SECRET_KEY`, then pass `--supabase-sync` to the `manifest` command. Use `--redact-paths` when uploading manifests from a personal machine; it replaces the root with `[redacted]`, keeps relative file paths, and includes a stable root hash for grouping. The default table is `organizer_manifests`, or override it with `--supabase-table` / `SUPABASE_MANIFEST_TABLE`.
 
 ## Project Structure
 

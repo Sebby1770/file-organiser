@@ -116,8 +116,25 @@ def test_manifest_command_writes_inventory(tmp_path: Path):
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert result == 0
     assert payload["total_files"] == 1
+    assert payload["total_bytes"] == 5
+    assert payload["category_bytes"]["Images"] == 5
     assert payload["files"][0]["category"] == "Images"
     assert payload["files"][0]["checksum"]
+
+
+def test_manifest_can_redact_absolute_paths(tmp_path: Path):
+    write(tmp_path / "nested" / "photo.jpg", "image")
+    output = tmp_path / "manifest.json"
+
+    result = main(["manifest", str(tmp_path), "--recursive", "--redact-paths", "--output", str(output)])
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    manifest_text = json.dumps(payload)
+    assert result == 0
+    assert payload["root"] == "[redacted]"
+    assert payload["root_hash"]
+    assert payload["files"][0]["source"] == str(Path("nested") / "photo.jpg")
+    assert str(tmp_path) not in manifest_text
 
 
 def test_manifest_supabase_sync_posts_inventory(tmp_path: Path, monkeypatch):
@@ -149,6 +166,7 @@ def test_manifest_supabase_sync_posts_inventory(tmp_path: Path, monkeypatch):
             str(tmp_path),
             "--output",
             str(output),
+            "--redact-paths",
             "--supabase-sync",
             "--supabase-table",
             "organizer_manifests",
@@ -162,8 +180,11 @@ def test_manifest_supabase_sync_posts_inventory(tmp_path: Path, monkeypatch):
     assert request.full_url == "https://example.supabase.co/rest/v1/organizer_manifests"
     assert timeout == 2
     assert body["file_count"] == 1
+    assert body["total_bytes"] == 5
     assert body["category_counts"]["Images"] == 1
+    assert body["manifest"]["root"] == "[redacted]"
     assert body["manifest"]["files"][0]["category"] == "Images"
+    assert str(tmp_path) not in request.data.decode("utf-8")
 
 
 def test_manifest_supabase_sync_requires_backend_env(tmp_path: Path, monkeypatch):

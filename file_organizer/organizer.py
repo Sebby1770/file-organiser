@@ -42,6 +42,7 @@ class OrganizeOptions:
     db_path: Path | None = None
     max_files: int | None = None
     min_age_seconds: int = 0
+    redact_paths: bool = False
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,15 @@ def _file_checksum(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _manifest_path(path: Path, folder: Path, redact: bool) -> str:
+    if not redact:
+        return str(path)
+    try:
+        return str(path.relative_to(folder))
+    except ValueError:
+        return path.name
+
+
 def _scan_folder(folder: Path, rules: Dict[str, List[str]], options: OrganizeOptions) -> List[PlannedMove]:
     """Build a list of planned file moves."""
     planned: List[PlannedMove] = []
@@ -115,12 +125,17 @@ def _scan_folder(folder: Path, rules: Dict[str, List[str]], options: OrganizeOpt
 def build_manifest(folder: Path, rules: Dict[str, List[str]], options: OrganizeOptions) -> dict:
     planned = _scan_folder(folder, rules, options)
     files = []
+    total_bytes = 0
+    category_bytes: dict[str, int] = defaultdict(int)
     for move in planned:
         stat = move.source.stat()
+        target = move.target_dir / move.source.name
+        total_bytes += stat.st_size
+        category_bytes[move.category] += stat.st_size
         files.append(
             {
-                "source": str(move.source),
-                "target": str((move.target_dir / move.source.name)),
+                "source": _manifest_path(move.source, folder, options.redact_paths),
+                "target": _manifest_path(target, folder, options.redact_paths),
                 "category": move.category,
                 "size_bytes": stat.st_size,
                 "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
@@ -130,15 +145,19 @@ def build_manifest(folder: Path, rules: Dict[str, List[str]], options: OrganizeO
     grouped = _group_planned(planned)
     return {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "root": str(folder),
+        "root": "[redacted]" if options.redact_paths else str(folder),
+        "root_hash": sha256(str(folder.resolve()).encode("utf-8")).hexdigest()[:16],
         "total_files": len(files),
+        "total_bytes": total_bytes,
         "categories": {category: len(items) for category, items in sorted(grouped.items())},
+        "category_bytes": {category: category_bytes[category] for category in sorted(category_bytes)},
         "options": {
             "recursive": options.recursive,
             "partition_by_date": options.partition_by_date,
             "quarantine_unknown": options.quarantine_unknown,
             "dedupe": options.dedupe,
             "min_age_seconds": options.min_age_seconds,
+            "redact_paths": options.redact_paths,
         },
         "files": files,
     }
@@ -160,6 +179,7 @@ def sync_manifest_to_supabase(payload: dict, table: str | None = None) -> dict:
         "source": "file-organizer-cli",
         "root": payload["root"],
         "file_count": payload["total_files"],
+        "total_bytes": payload["total_bytes"],
         "category_counts": payload["categories"],
         "manifest": payload,
     }
