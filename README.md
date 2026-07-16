@@ -4,9 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/Sebby1770/file-organiser/actions/workflows/ci.yml/badge.svg)](https://github.com/Sebby1770/file-organiser/actions/workflows/ci.yml)
 
-**Smart CLI to sort, dedupe, and watch folders by type and date.**
+**Smart CLI to sort, dedupe, and watch folders by type, MIME, and date.**
 
-Sort messy downloads into category folders (`Images/`, `Documents/`, `Videos/`, …), find content duplicates by SHA-256, nest by year/month, and optionally watch a folder for new files — with dry-run, undo, and rich terminal output.
+Sort messy downloads into category folders (`Images/`, `Documents/`, `Videos/`, …), find content duplicates by SHA-256 (parallel hashing), nest by year/month, prune empty dirs, multi-level undo, and optionally watch a folder for new files — with dry-run, stats, and rich terminal output.
 
 ## Features
 
@@ -14,19 +14,26 @@ Sort messy downloads into category folders (`Images/`, `Documents/`, `Videos/`, 
 |--------|-----------------|
 | Organize by type | `organize FOLDER` |
 | Preview only | `preview FOLDER` |
-| Undo last run | `undo FOLDER` |
+| Folder stats | `stats FOLDER` |
+| Undo last run (stack) | `undo FOLDER` |
+| List undo history | `undo FOLDER --list` |
+| Prune empty dirs | `prune FOLDER` / `--prune-empty` |
 | Recursive | `-r` / `--recursive` |
+| Max scan depth | `--max-depth N` |
+| MIME fallback | `--mime` |
 | Copy instead of move | `--copy` |
 | Date nesting `Category/YYYY/MM` | `--by-date` |
 | Min size filter | `--min-size 1K` |
 | Exclude globs | `--exclude "*.tmp"` |
 | Conflict strategy | `--on-conflict rename\|skip\|overwrite` |
-| JSON/CSV report | `--report out.json` |
+| JSON/CSV/Markdown report | `--report out.md` |
 | Quiet / verbose | `-q` / `-v` |
 | Find duplicates | `duplicates FOLDER` |
+| Parallel hash workers | `duplicates … --workers N` |
 | Delete dupes | `duplicates … --delete-dupes` |
 | Watch mode | `watch FOLDER` (optional extra) |
 | List rules | `categories` |
+| Config discovery | `./.file-organiser.json` or XDG |
 
 ## Install
 
@@ -56,17 +63,8 @@ python -m file_organiser --help
 
 ```bash
 file-organiser preview ~/Downloads
-```
-
-```
-┌──────────────── Preview: /Users/you/Downloads ────────────────┐
-│ Category      │ Count │ Example files                         │
-├───────────────┼───────┼───────────────────────────────────────┤
-│ Documents     │     4 │ report.pdf, notes.txt, ...            │
-│ Images        │    12 │ photo.jpg, screenshot.png, ...        │
-│ Videos        │     2 │ clip.mp4, demo.mov                    │
-└───────────────┴───────┴───────────────────────────────────────┘
-Total: 18 file(s) across 3 categor(ies)
+file-organiser preview ~/Downloads --mime          # MIME fallback for unknown extensions
+file-organiser preview ~/Downloads -r --max-depth 2
 ```
 
 ### Organize
@@ -81,34 +79,64 @@ file-organiser organize ~/Downloads --dry-run
 # Recursive (skip folders already named like categories)
 file-organiser organize ~/Downloads -r
 
+# Limit depth (0 = top level only)
+file-organiser organize ~/Downloads -r --max-depth 1
+
+# MIME-aware categorization for extensionless / unknown files
+file-organiser organize ~/Downloads --mime
+
 # Copy instead of move
 file-organiser organize ~/Downloads --copy
 
 # Nest by modification date: Images/2024/03/photo.jpg
 file-organiser organize ~/Downloads --by-date
 
-# Filters & conflict handling
+# After moving, remove empty dirs left behind
+file-organiser organize ~/Downloads -r --prune-empty
+
+# Filters, conflict handling, reports
 file-organiser organize ~/Downloads \
   --min-size 10K \
   --exclude "*.tmp" --exclude "node_modules" \
   --on-conflict rename \
-  --report ~/Downloads/moves.json \
+  --report ~/Downloads/moves.md \
   -v
 ```
 
-### Undo
+### Stats
 
 ```bash
-file-organiser undo ~/Downloads
+file-organiser stats ~/Downloads
+file-organiser stats ~/Downloads --top 20 --mime
+file-organiser stats ~/Downloads --no-recursive
 ```
 
-Restores the last organize (or removes copies if you used `--copy`). History lives in `.organizer_history.json` inside the folder.
+Shows total file count and size, breakdown by category (count + bytes), and the largest files.
+
+### Undo (multi-level)
+
+```bash
+file-organiser undo ~/Downloads           # pop most recent snapshot
+file-organiser undo ~/Downloads --list    # show history stack
+```
+
+Each successful `organize` **pushes** a snapshot onto a stack in `.organizer_history.json` (last 10 kept). `undo` pops the most recent. Legacy single-snapshot history files are still supported.
+
+### Prune empty directories
+
+```bash
+file-organiser prune ~/Downloads
+file-organiser prune ~/Downloads --dry-run
+```
+
+Only removes **empty** subdirectories. Never deletes the root folder or any non-empty dir. Prefer this after recursive organize when leftover empty trees remain, or use `organize --prune-empty` for move mode.
 
 ### Duplicates
 
 ```bash
-# Find files with identical content (SHA-256)
+# Find files with identical content (SHA-256, parallel by default)
 file-organiser duplicates ~/Downloads
+file-organiser duplicates ~/Downloads --workers 4
 
 # Dry-run delete (keep oldest of each group)
 file-organiser duplicates ~/Downloads --delete-dupes --dry-run
@@ -133,7 +161,7 @@ file-organiser categories
 file-organiser categories --config rules.example.json
 ```
 
-## Custom rules
+## Custom rules & config discovery
 
 JSON object mapping category → list of extensions (dot optional, case-insensitive):
 
@@ -149,7 +177,13 @@ JSON object mapping category → list of extensions (dot optional, case-insensit
 file-organiser organize ~/Downloads --config rules.example.json
 ```
 
-Unmatched extensions go to `Other/`.
+When **`--config` is omitted**, rules are discovered in order:
+
+1. `./.file-organiser.json` (current working directory)
+2. `~/.config/file-organiser/rules.json` (or `$XDG_CONFIG_HOME/file-organiser/rules.json`)
+3. Built-in defaults
+
+Unmatched extensions go to `Other/`. With `--mime`, unknown/missing extensions also try `mimetypes.guess_type` (e.g. `image/*` → Images, `application/pdf` → Documents).
 
 ### Default categories
 
@@ -167,6 +201,27 @@ Unmatched extensions go to `Other/`.
 | Fonts | `.ttf` `.woff` … |
 | Other | anything else |
 
+### MIME fallback (`--mime`)
+
+| MIME | Category |
+|------|----------|
+| `image/*` | Images |
+| `video/*` | Videos |
+| `audio/*` | Audio |
+| `text/*` | Documents |
+| `application/pdf` | Documents |
+| `application/zip`, `application/gzip`, … | Archives |
+| `application/json`, `application/javascript`, … | Code |
+| `font/*`, `application/font-woff` | Fonts |
+
+## Reports
+
+`--report PATH` chooses format by extension:
+
+- `.json` — structured JSON (default for unknown suffixes)
+- `.csv` — CSV with source/destination columns
+- `.md` / `.markdown` — Markdown table
+
 ## Project layout
 
 ```
@@ -175,13 +230,13 @@ file-organiser/
 │   ├── __init__.py
 │   ├── __main__.py
 │   ├── cli.py           # argparse entry
-│   ├── organizer.py     # organize / preview / undo
-│   ├── rules.py         # defaults + config loader
-│   ├── history.py       # undo history
-│   ├── scanner.py       # walk, filters, size parse
-│   ├── duplicates.py    # SHA-256 dupe finder
+│   ├── organizer.py     # organize / preview / undo / stats / prune
+│   ├── rules.py         # defaults, MIME map, config discovery
+│   ├── history.py       # multi-level undo stack
+│   ├── scanner.py       # walk, filters, max-depth, size parse
+│   ├── duplicates.py    # parallel SHA-256 dupe finder
 │   ├── watch.py         # optional watchdog
-│   └── report.py        # JSON/CSV reports
+│   └── report.py        # JSON/CSV/Markdown reports
 ├── tests/
 ├── pyproject.toml
 ├── rules.example.json
@@ -195,6 +250,7 @@ file-organiser/
 - Skips **hidden** files/dirs (names starting with `.`) and the history file.
 - Recursive mode **skips** existing category folders so files are not re-sorted endlessly.
 - Default conflict strategy **renames** (`photo (1).jpg`) — nothing overwritten unless you pass `--on-conflict overwrite`.
+- `prune` / `--prune-empty` only remove **empty** directories.
 - Prefer `--dry-run` before destructive runs (especially `--delete-dupes`).
 
 ## Development

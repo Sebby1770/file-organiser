@@ -10,9 +10,9 @@ from rich.console import Console
 from rich.table import Table
 
 from . import __version__
-from .duplicates import find_and_report_duplicates
-from .organizer import organize, preview, undo
-from .rules import DEFAULT_RULES, OTHER_CATEGORY, load_rules
+from .duplicates import default_workers, find_and_report_duplicates
+from .organizer import organize, preview, prune_empty_dirs, show_stats, undo
+from .rules import DEFAULT_RULES, OTHER_CATEGORY, discover_config, load_rules
 from .scanner import parse_size
 
 
@@ -30,7 +30,11 @@ def _add_config_arg(sp: argparse.ArgumentParser) -> None:
         "--config",
         type=Path,
         default=None,
-        help="Path to a custom JSON rules config file.",
+        help=(
+            "Path to a custom JSON rules config file. "
+            "If omitted, looks for ./.file-organiser.json then "
+            "~/.config/file-organiser/rules.json."
+        ),
     )
 
 
@@ -51,12 +55,19 @@ def _add_verbosity(sp: argparse.ArgumentParser) -> None:
 
 
 def _add_scan_opts(sp: argparse.ArgumentParser) -> None:
-    """Common scan/filter options for organize/preview/duplicates/watch."""
+    """Common scan/filter options for organize/preview/duplicates/watch/stats."""
     sp.add_argument(
         "-r",
         "--recursive",
         action="store_true",
         help="Process nested folders (skip existing category folders).",
+    )
+    sp.add_argument(
+        "--max-depth",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Limit recursive scan depth (0 = top level only).",
     )
     sp.add_argument(
         "--min-size",
@@ -71,6 +82,14 @@ def _add_scan_opts(sp: argparse.ArgumentParser) -> None:
         default=[],
         metavar="GLOB",
         help="Exclude files/dirs matching GLOB (repeatable).",
+    )
+    sp.add_argument(
+        "--mime",
+        action="store_true",
+        help=(
+            "When extension is unknown/missing, fall back to MIME type "
+            "(mimetypes.guess_type) for categorization."
+        ),
     )
 
 
@@ -103,7 +122,12 @@ def _add_organize_opts(sp: argparse.ArgumentParser) -> None:
         type=Path,
         default=None,
         metavar="PATH",
-        help="Write a JSON or CSV report of all moves to PATH.",
+        help="Write a JSON, CSV, or Markdown report of all moves to PATH.",
+    )
+    sp.add_argument(
+        "--prune-empty",
+        action="store_true",
+        help="After move-mode organize, remove empty directories left behind.",
     )
     _add_verbosity(sp)
 
@@ -165,14 +189,69 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_verbosity(sp_preview)
 
+    # --- stats ---
+    sp_stats = subparsers.add_parser(
+        "stats",
+        help="Show folder statistics by category and size.",
+        description=(
+            "Scan a folder and report total files, total size, breakdown by "
+            "category, and the largest files."
+        ),
+    )
+    _add_folder_arg(sp_stats)
+    _add_config_arg(sp_stats)
+    _add_scan_opts(sp_stats)
+    sp_stats.add_argument(
+        "--top",
+        type=int,
+        default=10,
+        metavar="N",
+        help="Show top N largest files (default: 10).",
+    )
+    # stats defaults to recursive
+    sp_stats.set_defaults(recursive=True)
+    sp_stats.add_argument(
+        "--no-recursive",
+        action="store_false",
+        dest="recursive",
+        help="Only scan the top level of the folder.",
+    )
+    _add_verbosity(sp_stats)
+
     # --- undo ---
     sp_undo = subparsers.add_parser(
         "undo",
         help="Revert the last organize operation in a folder.",
-        description="Use the history file to move files back (or remove copies).",
+        description=(
+            "Use the history stack to move files back (or remove copies). "
+            "Supports multiple levels; use --list to inspect the stack."
+        ),
     )
     _add_folder_arg(sp_undo)
+    sp_undo.add_argument(
+        "--list",
+        action="store_true",
+        dest="list_history",
+        help="List undo history snapshots without reverting.",
+    )
     _add_verbosity(sp_undo)
+
+    # --- prune ---
+    sp_prune = subparsers.add_parser(
+        "prune",
+        help="Remove empty directories under a folder.",
+        description=(
+            "Delete empty subdirectories only — never removes non-empty dirs "
+            "or the root folder itself."
+        ),
+    )
+    _add_folder_arg(sp_prune)
+    sp_prune.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show empty dirs that would be removed without deleting them.",
+    )
+    _add_verbosity(sp_prune)
 
     # --- duplicates ---
     sp_dup = subparsers.add_parser(
@@ -196,6 +275,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Only scan the top level of the folder.",
     )
     sp_dup.add_argument(
+        "--max-depth",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Limit recursive scan depth (0 = top level only).",
+    )
+    sp_dup.add_argument(
         "--min-size",
         type=str,
         default=None,
@@ -208,6 +294,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="GLOB",
         help="Exclude files/dirs matching GLOB (repeatable).",
+    )
+    sp_dup.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        metavar="N",
+        help=f"Parallel hash workers (default: min(8, cpu)={default_workers()}).",
     )
     sp_dup.add_argument(
         "--delete-dupes",
@@ -261,8 +354,15 @@ def _resolve_min_size(value: Optional[str], console: Console) -> int:
         raise SystemExit(2) from e
 
 
+def _resolve_rules(config_arg: Optional[Path]) -> dict:
+    """Load rules using explicit config or discovery."""
+    path = discover_config(config_arg)
+    return load_rules(path)
+
+
 def list_categories(console: Console, config: Optional[Path] = None) -> None:
-    rules = load_rules(config)
+    path = discover_config(config)
+    rules = load_rules(path)
     table = Table(title="File categories", header_style="bold cyan")
     table.add_column("Category", style="green")
     table.add_column("Extensions", style="white")
@@ -271,7 +371,8 @@ def list_categories(console: Console, config: Optional[Path] = None) -> None:
         table.add_row(name, exts)
     table.add_row(OTHER_CATEGORY, "[dim](anything unmatched)[/dim]")
     console.print(table)
-    console.print(f"[dim]{len(rules)} categories (+ {OTHER_CATEGORY})[/dim]")
+    src = str(path) if path else "built-in defaults"
+    console.print(f"[dim]{len(rules)} categories (+ {OTHER_CATEGORY}) — config: {src}[/dim]")
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -290,7 +391,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         verbose = getattr(args, "verbose", False)
 
         if args.command == "undo":
-            undo(folder, console, quiet=quiet)
+            undo(
+                folder,
+                console,
+                quiet=quiet,
+                list_only=getattr(args, "list_history", False),
+            )
+            return 0
+
+        if args.command == "prune":
+            prune_empty_dirs(
+                folder,
+                console,
+                dry_run=getattr(args, "dry_run", False),
+                quiet=quiet,
+            )
             return 0
 
         if args.command == "duplicates":
@@ -301,19 +416,38 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 recursive=args.recursive,
                 exclude=getattr(args, "exclude", None) or None,
                 min_size=min_size,
+                max_depth=getattr(args, "max_depth", None),
+                workers=getattr(args, "workers", None),
                 delete_dupes=args.delete_dupes,
                 keep=args.keep,
                 dry_run=args.dry_run,
             )
             return 0
 
-        # Rules needed for organize / preview / watch
-        config_path = (
+        # Rules needed for organize / preview / watch / stats
+        config_arg = (
             args.config.expanduser().resolve() if getattr(args, "config", None) else None
         )
-        rules = load_rules(config_path)
+        rules = _resolve_rules(config_arg)
         min_size = _resolve_min_size(getattr(args, "min_size", None), console)
         exclude: List[str] = list(getattr(args, "exclude", None) or [])
+        use_mime = bool(getattr(args, "mime", False))
+        max_depth = getattr(args, "max_depth", None)
+
+        if args.command == "stats":
+            show_stats(
+                folder,
+                rules,
+                console,
+                recursive=args.recursive,
+                exclude=exclude or None,
+                min_size=min_size,
+                use_mime=use_mime,
+                max_depth=max_depth,
+                top_n=getattr(args, "top", 10),
+                quiet=quiet,
+            )
+            return 0
 
         if args.command == "preview":
             preview(
@@ -325,6 +459,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 min_size=min_size,
                 by_date=getattr(args, "by_date", False),
                 date_source=getattr(args, "date_source", "mtime"),
+                use_mime=use_mime,
+                max_depth=max_depth,
                 quiet=quiet,
             )
             return 0
@@ -343,6 +479,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 exclude=exclude or None,
                 on_conflict=args.on_conflict,
                 report_path=args.report.expanduser().resolve() if args.report else None,
+                use_mime=use_mime,
+                max_depth=max_depth,
+                prune_empty=getattr(args, "prune_empty", False),
                 quiet=quiet,
                 verbose=verbose,
             )

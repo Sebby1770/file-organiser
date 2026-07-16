@@ -4,16 +4,31 @@ from __future__ import annotations
 import hashlib
 import os
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Sequence, Tuple
 
 from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from rich.table import Table
 
 from .history import HISTORY_FILENAME
 from .scanner import iter_files, matches_exclude
 
 KeepPolicy = Literal["oldest", "newest"]
+
+
+def default_workers() -> int:
+    """Default thread-pool size: min(8, cpu_count)."""
+    cpu = os.cpu_count() or 1
+    return max(1, min(8, cpu))
 
 
 def file_sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
@@ -28,16 +43,29 @@ def file_sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
     return h.hexdigest()
 
 
+def _hash_safe(path: Path) -> Tuple[Path, Optional[str]]:
+    """Hash a file; return (path, digest) or (path, None) on error."""
+    try:
+        return path, file_sha256(path)
+    except OSError:
+        return path, None
+
+
 def find_duplicates(
     folder: Path,
     *,
     recursive: bool = True,
     exclude: Sequence[str] | None = None,
     min_size: int = 0,
+    max_depth: int | None = None,
+    workers: int | None = None,
+    console: Console | None = None,
+    show_progress: bool = False,
 ) -> Dict[str, List[Path]]:
     """Find duplicate files by SHA-256 content hash.
 
-    Returns only groups with 2+ files, keyed by hash.
+    Uses a thread pool for parallel hashing. Returns only groups with 2+
+    files, keyed by hash.
     """
     files = iter_files(
         folder,
@@ -46,6 +74,7 @@ def find_duplicates(
         min_size=min_size,
         category_names=None,
         skip_category_folders=False,
+        max_depth=max_depth,
     )
     # Quick pre-group by size to avoid hashing unique sizes
     by_size: Dict[int, List[Path]] = defaultdict(list)
@@ -56,16 +85,51 @@ def find_duplicates(
             continue
         by_size[size].append(path)
 
-    by_hash: Dict[str, List[Path]] = defaultdict(list)
+    to_hash: List[Path] = []
     for size, paths in by_size.items():
-        if len(paths) < 2:
-            continue
-        for path in paths:
-            try:
-                digest = file_sha256(path)
-            except OSError:
-                continue
-            by_hash[digest].append(path)
+        if len(paths) >= 2:
+            to_hash.extend(paths)
+
+    by_hash: Dict[str, List[Path]] = defaultdict(list)
+    if not to_hash:
+        return {}
+
+    n_workers = workers if workers is not None else default_workers()
+    n_workers = max(1, n_workers)
+
+    if n_workers == 1 or len(to_hash) == 1:
+        for path in to_hash:
+            p, digest = _hash_safe(path)
+            if digest is not None:
+                by_hash[digest].append(p)
+    else:
+        progress_ctx = None
+        task_id = None
+        if show_progress and console is not None:
+            progress_ctx = Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                MofNCompleteColumn(),
+                TimeElapsedColumn(),
+                console=console,
+                transient=True,
+            )
+            progress_ctx.start()
+            task_id = progress_ctx.add_task("Hashing files...", total=len(to_hash))
+
+        try:
+            with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                futures = {pool.submit(_hash_safe, p): p for p in to_hash}
+                for fut in as_completed(futures):
+                    p, digest = fut.result()
+                    if digest is not None:
+                        by_hash[digest].append(p)
+                    if progress_ctx is not None and task_id is not None:
+                        progress_ctx.advance(task_id, 1)
+        finally:
+            if progress_ctx is not None:
+                progress_ctx.stop()
 
     return {h: paths for h, paths in by_hash.items() if len(paths) >= 2}
 
@@ -91,6 +155,8 @@ def find_and_report_duplicates(
     recursive: bool = True,
     exclude: Sequence[str] | None = None,
     min_size: int = 0,
+    max_depth: int | None = None,
+    workers: int | None = None,
     delete_dupes: bool = False,
     keep: KeepPolicy = "oldest",
     dry_run: bool = False,
@@ -105,7 +171,14 @@ def find_and_report_duplicates(
 
     console.print(f"Scanning for duplicates in [cyan]{folder}[/cyan] ...")
     groups = find_duplicates(
-        folder, recursive=recursive, exclude=exclude, min_size=min_size
+        folder,
+        recursive=recursive,
+        exclude=exclude,
+        min_size=min_size,
+        max_depth=max_depth,
+        workers=workers,
+        console=console,
+        show_progress=True,
     )
 
     if not groups:

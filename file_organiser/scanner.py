@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Set
 
 from .history import HISTORY_FILENAME
-from .rules import category_for_extension
+from .rules import category_for_path
 
 # Size units for --min-size (e.g. 1K, 10M, 1.5G)
 _SIZE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([KkMmGgTtBb]?)\s*$")
@@ -36,6 +36,18 @@ def parse_size(value: str) -> int:
     number = float(match.group(1))
     unit = match.group(2).upper()
     return int(number * _SIZE_MULTIPLIERS[unit])
+
+
+def format_size(num_bytes: int) -> str:
+    """Format a byte count as a human-readable string."""
+    n = float(num_bytes)
+    for unit in ("B", "K", "M", "G", "T"):
+        if abs(n) < 1024 or unit == "T":
+            if unit == "B":
+                return f"{int(n)}B"
+            return f"{n:.1f}{unit}"
+        n /= 1024
+    return f"{num_bytes}B"
 
 
 def matches_exclude(path: Path, root: Path, patterns: Sequence[str]) -> bool:
@@ -83,6 +95,17 @@ def _is_under_category(
     return False
 
 
+def _depth_from_root(path: Path, root: Path) -> int:
+    """Return nesting depth of *path* relative to *root* (0 = directly in root)."""
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        return 0
+    # For a file in root: parts = (name,) → depth 0
+    # For a file in sub/: parts = (sub, name) → depth 1
+    return max(0, len(rel.parts) - 1)
+
+
 def iter_files(
     folder: Path,
     *,
@@ -91,6 +114,7 @@ def iter_files(
     min_size: int = 0,
     category_names: Iterable[str] | None = None,
     skip_category_folders: bool = True,
+    max_depth: int | None = None,
 ) -> List[Path]:
     """Collect files to organize under *folder*.
 
@@ -99,10 +123,16 @@ def iter_files(
     - Never follows symlinks
     - When recursive and *skip_category_folders*, does not re-scan files already
       living under known category directories (to avoid re-organizing).
+    - *max_depth*: when recursive, limit how deep to walk (0 = only top level,
+      same as non-recursive; ``None`` = unlimited).
     """
     exclude = list(exclude or [])
     categories: Set[str] = set(category_names or [])
     results: List[Path] = []
+
+    # max_depth 0 is equivalent to non-recursive top-level only
+    if max_depth is not None and max_depth <= 0:
+        recursive = False
 
     def consider(path: Path) -> None:
         if not path.is_file() or path.is_symlink():
@@ -121,6 +151,9 @@ def iter_files(
                 return
         if skip_category_folders and categories and _is_under_category(path, folder, categories):
             return
+        if max_depth is not None and recursive:
+            if _depth_from_root(path, folder) > max_depth:
+                return
         results.append(path)
 
     if not recursive:
@@ -143,7 +176,13 @@ def iter_files(
     for dirpath, dirnames, filenames in os.walk(folder, followlinks=False):
         current = Path(dirpath)
 
-        # Prune hidden dirs, excluded dirs, and category folders
+        # Depth of this directory relative to folder (0 = folder itself)
+        try:
+            dir_depth = len(current.relative_to(folder).parts)
+        except ValueError:
+            dir_depth = 0
+
+        # Prune hidden dirs, excluded dirs, category folders, and depth limit
         keep_dirs: List[str] = []
         for d in dirnames:
             if d.startswith("."):
@@ -156,7 +195,11 @@ def iter_files(
             if skip_category_folders and categories and d in categories:
                 # Skip entire category subtrees to avoid re-organizing
                 continue
-            # Also skip if we're already under a category (shouldn't happen due to prune)
+            # Child dir depth would be dir_depth + 1; files inside it have
+            # depth dir_depth + 1. Allow walking into dirs whose files would
+            # still be within max_depth.
+            if max_depth is not None and (dir_depth + 1) > max_depth:
+                continue
             keep_dirs.append(d)
         dirnames[:] = keep_dirs
 
@@ -173,6 +216,8 @@ def scan_folder(
     recursive: bool = False,
     exclude: Sequence[str] | None = None,
     min_size: int = 0,
+    use_mime: bool = False,
+    max_depth: int | None = None,
 ) -> Dict[str, List[Path]]:
     """Group scannable files by target category."""
     category_names = set(rules.keys()) | {"Other"}
@@ -183,9 +228,10 @@ def scan_folder(
         min_size=min_size,
         category_names=category_names,
         skip_category_folders=True,
+        max_depth=max_depth,
     )
     grouped: Dict[str, List[Path]] = defaultdict(list)
     for path in files:
-        category = category_for_extension(path.suffix, rules)
+        category = category_for_path(path, rules, use_mime=use_mime)
         grouped[category].append(path)
     return grouped

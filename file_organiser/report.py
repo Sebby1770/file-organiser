@@ -1,4 +1,4 @@
-"""JSON/CSV reports of organize operations."""
+"""JSON/CSV/Markdown reports of organize operations."""
 from __future__ import annotations
 
 import csv
@@ -15,9 +15,10 @@ def write_report(
     mode: str = "move",
     dry_run: bool = False,
 ) -> None:
-    """Write a report of moves/copies to JSON or CSV based on file extension.
+    """Write a report of moves/copies to JSON, CSV, or Markdown by extension.
 
     Each record is (destination_or_target, source/original).
+    Detects format by suffix: ``.csv``, ``.md`` / ``.markdown``, else JSON.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -40,6 +41,25 @@ def write_report(
             )
             writer.writeheader()
             writer.writerows(ordered)
+    elif suffix in (".md", ".markdown"):
+        ts = datetime.now().isoformat(timespec="seconds")
+        lines: List[str] = [
+            "# File organiser report",
+            "",
+            f"- **Timestamp:** {ts}",
+            f"- **Mode:** `{mode}`",
+            f"- **Dry run:** {dry_run}",
+            f"- **Count:** {len(ordered)}",
+            "",
+            "| Source | Destination |",
+            "|--------|-------------|",
+        ]
+        for row in ordered:
+            src = row["source"].replace("|", "\\|")
+            dst = row["destination"].replace("|", "\\|")
+            lines.append(f"| `{src}` | `{dst}` |")
+        lines.append("")
+        path.write_text("\n".join(lines), encoding="utf-8")
     else:
         payload = {
             "timestamp": datetime.now().isoformat(timespec="seconds"),

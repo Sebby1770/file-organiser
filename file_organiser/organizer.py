@@ -1,6 +1,7 @@
-"""Core logic for scanning, organizing, previewing, and undoing."""
+"""Core logic for scanning, organizing, previewing, undoing, stats, and prune."""
 from __future__ import annotations
 
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -17,9 +18,10 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from .history import HistoryManager
+from .history import HISTORY_FILENAME, HistoryManager
 from .report import write_report
-from .scanner import scan_folder
+from .rules import category_for_path
+from .scanner import format_size, iter_files, scan_folder
 
 ConflictStrategy = Literal["rename", "skip", "overwrite"]
 DateSource = Literal["mtime", "ctime"]
@@ -92,6 +94,8 @@ def plan_moves(
     by_date: bool = False,
     date_source: DateSource = "mtime",
     on_conflict: ConflictStrategy = "rename",
+    use_mime: bool = False,
+    max_depth: int | None = None,
 ) -> Tuple[List[Tuple[Path, Path]], List[str]]:
     """Plan (src, dest) pairs without performing I/O beyond scanning/stat.
 
@@ -103,6 +107,8 @@ def plan_moves(
         recursive=recursive,
         exclude=exclude,
         min_size=min_size,
+        use_mime=use_mime,
+        max_depth=max_depth,
     )
     pairs: List[Tuple[Path, Path]] = []
     skips: List[str] = []
@@ -158,6 +164,8 @@ def preview(
     min_size: int = 0,
     by_date: bool = False,
     date_source: DateSource = "mtime",
+    use_mime: bool = False,
+    max_depth: int | None = None,
     quiet: bool = False,
 ) -> None:
     """Show what would be organized, without moving anything."""
@@ -171,6 +179,8 @@ def preview(
         recursive=recursive,
         exclude=exclude,
         min_size=min_size,
+        use_mime=use_mime,
+        max_depth=max_depth,
     )
     if not grouped:
         console.print(f"[yellow]No files to organize in[/yellow] {folder}")
@@ -208,6 +218,165 @@ def preview(
         )
 
 
+def show_stats(
+    folder: Path,
+    rules: Dict[str, List[str]],
+    console: Console,
+    *,
+    recursive: bool = True,
+    exclude: Sequence[str] | None = None,
+    min_size: int = 0,
+    use_mime: bool = False,
+    max_depth: int | None = None,
+    top_n: int = 10,
+    quiet: bool = False,
+) -> None:
+    """Scan folder and print totals, category breakdown, and largest files."""
+    if not folder.exists() or not folder.is_dir():
+        console.print(f"[red]Error:[/red] '{folder}' is not a valid directory.")
+        return
+
+    # Stats includes files already in category folders
+    category_names = set(rules.keys()) | {"Other"}
+    files = iter_files(
+        folder,
+        recursive=recursive,
+        exclude=exclude,
+        min_size=min_size,
+        category_names=category_names,
+        skip_category_folders=False,
+        max_depth=max_depth,
+    )
+
+    if not files:
+        console.print(f"[yellow]No files found in[/yellow] {folder}")
+        return
+
+    # Category + size
+    by_cat_count: Dict[str, int] = {}
+    by_cat_bytes: Dict[str, int] = {}
+    sizes: List[Tuple[Path, int]] = []
+    total_bytes = 0
+
+    for path in files:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        cat = category_for_path(path, rules, use_mime=use_mime)
+        by_cat_count[cat] = by_cat_count.get(cat, 0) + 1
+        by_cat_bytes[cat] = by_cat_bytes.get(cat, 0) + size
+        sizes.append((path, size))
+        total_bytes += size
+
+    total_files = sum(by_cat_count.values())
+
+    console.print(f"[bold]Stats for[/bold] [cyan]{folder}[/cyan]")
+    console.print(
+        f"  Files: [bold]{total_files}[/bold]  "
+        f"Size: [bold]{format_size(total_bytes)}[/bold] ({total_bytes:,} bytes)"
+    )
+
+    table = Table(title="By category", header_style="bold cyan")
+    table.add_column("Category", style="green")
+    table.add_column("Count", justify="right", style="magenta")
+    table.add_column("Size", justify="right", style="white")
+    table.add_column("Bytes", justify="right", style="dim")
+
+    for cat in sorted(by_cat_count.keys(), key=lambda c: (-by_cat_bytes.get(c, 0), c)):
+        table.add_row(
+            cat,
+            str(by_cat_count[cat]),
+            format_size(by_cat_bytes[cat]),
+            f"{by_cat_bytes[cat]:,}",
+        )
+    console.print(table)
+
+    sizes.sort(key=lambda x: x[1], reverse=True)
+    top = sizes[: max(1, top_n)]
+    large = Table(title=f"Largest files (top {len(top)})", header_style="bold cyan")
+    large.add_column("#", justify="right", style="dim")
+    large.add_column("Size", justify="right", style="magenta")
+    large.add_column("Path", style="white")
+    for i, (p, sz) in enumerate(top, 1):
+        try:
+            rel = str(p.relative_to(folder))
+        except ValueError:
+            rel = str(p)
+        large.add_row(str(i), format_size(sz), rel)
+    console.print(large)
+
+
+def prune_empty_dirs(
+    folder: Path,
+    console: Console | None = None,
+    *,
+    dry_run: bool = False,
+    quiet: bool = False,
+) -> int:
+    """Remove empty directories under *folder* (never the root itself).
+
+    Never deletes non-empty directories. Returns the number of dirs removed
+    (or that would be removed in dry-run).
+    """
+    if not folder.exists() or not folder.is_dir():
+        if console and not quiet:
+            console.print(f"[red]Error:[/red] '{folder}' is not a valid directory.")
+        return 0
+
+    removed = 0
+    # Multiple passes: removing a leaf may empty its parent
+    while True:
+        dirs = sorted(
+            [
+                p
+                for p in folder.rglob("*")
+                if p.is_dir() and not p.is_symlink()
+            ],
+            key=lambda p: len(p.parts),
+            reverse=True,
+        )
+        pass_removed = 0
+        for d in dirs:
+            if d == folder:
+                continue
+            # Skip hidden dirs (and anything under them already pruned by walk)
+            if any(part.startswith(".") for part in d.relative_to(folder).parts):
+                continue
+            try:
+                # Empty if no entries (or only empty after previous removals)
+                entries = list(d.iterdir())
+            except OSError:
+                continue
+            if entries:
+                continue
+            try:
+                if dry_run:
+                    if console and not quiet:
+                        console.print(f"  [dim]would remove empty[/dim] {d}")
+                else:
+                    d.rmdir()
+                    if console and not quiet:
+                        console.print(f"  [dim]removed empty[/dim] {d}")
+                removed += 1
+                pass_removed += 1
+            except OSError:
+                pass
+        if dry_run or pass_removed == 0:
+            break
+
+    if console and not quiet:
+        if dry_run:
+            console.print(
+                f"[yellow]Dry run:[/yellow] would remove {removed} empty director(ies)."
+            )
+        else:
+            console.print(
+                f"[green]✓[/green] Removed {removed} empty director(ies)."
+            )
+    return removed
+
+
 def organize(
     folder: Path,
     rules: Dict[str, List[str]],
@@ -222,6 +391,9 @@ def organize(
     exclude: Sequence[str] | None = None,
     on_conflict: ConflictStrategy = "rename",
     report_path: Optional[Path] = None,
+    use_mime: bool = False,
+    max_depth: int | None = None,
+    prune_empty: bool = False,
     quiet: bool = False,
     verbose: bool = False,
 ) -> int:
@@ -242,6 +414,8 @@ def organize(
         by_date=by_date,
         date_source=date_source,
         on_conflict=on_conflict,
+        use_mime=use_mime,
+        max_depth=max_depth,
     )
 
     if not pairs and not skips:
@@ -321,6 +495,12 @@ def organize(
     elif dry_run and not quiet:
         console.print("[yellow]Dry run complete.[/yellow] No files were modified.")
 
+    # Prune empty dirs after move-mode organize (not copy, not dry-run)
+    if prune_empty and not dry_run and not copy and history_moves:
+        n = prune_empty_dirs(folder, console if not quiet else None, quiet=quiet)
+        if quiet and n and console:
+            pass  # stay quiet
+
     if report_path is not None:
         write_report(report_path, report_moves, mode=mode, dry_run=dry_run)
         if not quiet:
@@ -334,23 +514,52 @@ def organize(
     return success
 
 
-def undo(folder: Path, console: Console, *, quiet: bool = False) -> int:
+def undo(
+    folder: Path,
+    console: Console,
+    *,
+    quiet: bool = False,
+    list_only: bool = False,
+) -> int:
     """Revert the most recent organize operation in this folder.
 
     For copy mode, removes the copies (does not delete originals).
     For move mode, moves files back to original locations.
+
+    With *list_only*, prints the history stack and returns 0 without undoing.
     """
     if not folder.exists() or not folder.is_dir():
         console.print(f"[red]Error:[/red] '{folder}' is not a valid directory.")
         return 0
 
     history = HistoryManager(folder)
-    moves = history.load()
-    if not moves:
+
+    if list_only:
+        snaps = history.list_snapshots()
+        if not snaps:
+            console.print(f"[yellow]No undo history found in[/yellow] {folder}")
+            return 0
+        table = Table(title=f"Undo history: {folder}", header_style="bold cyan")
+        table.add_column("#", justify="right", style="dim")
+        table.add_column("When", style="white")
+        table.add_column("Mode", style="magenta")
+        table.add_column("Files", justify="right", style="green")
+        for s in snaps:
+            label = "most recent" if s["index"] == 0 else str(s["index"])
+            table.add_row(label, s["timestamp"], s["mode"], str(s["count"]))
+        console.print(table)
+        console.print(
+            f"[dim]{len(snaps)} snapshot(s). Run [bold]undo[/bold] to pop the most recent.[/dim]"
+        )
+        return 0
+
+    snapshot = history.pop()
+    if not snapshot:
         console.print(f"[yellow]No undo history found in[/yellow] {folder}")
         return 0
 
-    mode = history.load_mode()
+    moves = [(Path(src), Path(dst)) for src, dst in snapshot.get("moves", [])]
+    mode = snapshot.get("mode", "move")
     if not quiet:
         console.print(
             f"Reverting [bold]{len(moves)}[/bold] file(s) in [cyan]{folder}[/cyan] "
@@ -368,7 +577,7 @@ def undo(folder: Path, console: Console, *, quiet: bool = False) -> int:
         console=console,
         disable=quiet,
     ) as progress:
-        task = progress.add_task("Restoring files...", total=len(moves))
+        task = progress.add_task("Restoring files...", total=max(len(moves), 1))
         for current, original in moves:
             try:
                 if not current.exists():
@@ -391,10 +600,15 @@ def undo(folder: Path, console: Console, *, quiet: bool = False) -> int:
     # Clean up empty directories under the folder (category / date nests)
     _cleanup_empty_dirs(folder)
 
-    history.clear()
+    remaining = history.load_stack()
     if not quiet:
         action = "Removed" if mode == "copy" else "Restored"
-        console.print(f"[green]✓[/green] {action} {restored} file(s).")
+        extra = (
+            f" ({len(remaining)} snapshot(s) remaining)"
+            if remaining
+            else ""
+        )
+        console.print(f"[green]✓[/green] {action} {restored} file(s).{extra}")
     if errors and not quiet:
         console.print(f"[red]Encountered {len(errors)} error(s):[/red]")
         for err in errors:
@@ -404,22 +618,15 @@ def undo(folder: Path, console: Console, *, quiet: bool = False) -> int:
 
 def _cleanup_empty_dirs(folder: Path) -> None:
     """Remove empty subdirectories under folder (deepest first)."""
+    # Walk bottom-up
     try:
-        for dirpath, dirnames, filenames in sorted(
-            ((p, [], []) for p in folder.rglob("*") if p.is_dir() and not p.is_symlink()),
-            key=lambda x: len(x[0].parts),
+        dirs = sorted(
+            [p for p in folder.rglob("*") if p.is_dir() and not p.is_symlink()],
+            key=lambda p: len(p.parts),
             reverse=True,
-        ):
-            pass
+        )
     except OSError:
         return
-
-    # Walk bottom-up
-    dirs = sorted(
-        [p for p in folder.rglob("*") if p.is_dir() and not p.is_symlink()],
-        key=lambda p: len(p.parts),
-        reverse=True,
-    )
     for d in dirs:
         try:
             next(d.iterdir())
