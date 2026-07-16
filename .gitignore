@@ -26,6 +26,9 @@ dist/
 .pytest_cache/
 .coverage
 htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
 
 # Organizer history files
 .organizer_history.json

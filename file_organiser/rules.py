@@ -37,7 +37,7 @@ def load_rules(config_path: Path | None = None) -> Dict[str, List[str]]:
         {"Images": [".jpg", ".png"], "Docs": [".pdf"]}
     """
     if config_path is None:
-        return DEFAULT_RULES
+        return dict(DEFAULT_RULES)
 
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
@@ -49,7 +49,9 @@ def load_rules(config_path: Path | None = None) -> Dict[str, List[str]]:
         raise ValueError(f"Invalid JSON in config file: {e}") from e
 
     if not isinstance(data, dict):
-        raise ValueError("Config file must contain a JSON object mapping categories to extension lists.")
+        raise ValueError(
+            "Config file must contain a JSON object mapping categories to extension lists."
+        )
 
     # Normalize: lowercase extensions, ensure leading dot.
     normalized: Dict[str, List[str]] = {}
@@ -69,3 +71,12 @@ def category_for_extension(ext: str, rules: Dict[str, List[str]]) -> str:
         if ext in extensions:
             return category
     return OTHER_CATEGORY
+
+
+def all_category_names(rules: Dict[str, List[str]] | None = None) -> List[str]:
+    """Return sorted category names including Other."""
+    rules = rules or DEFAULT_RULES
+    names = list(rules.keys())
+    if OTHER_CATEGORY not in names:
+        names.append(OTHER_CATEGORY)
+    return sorted(names)

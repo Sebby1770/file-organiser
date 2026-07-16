@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "file-organiser"
+version = "1.0.0"
+description = "Smart CLI to sort, dedupe, and watch folders by type and date"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [{ name = "Sebastian Forbes" }]
+keywords = ["files", "organiser", "organizer", "cli", "duplicates", "watch"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+watch = ["watchdog>=3.0.0"]
+test = ["pytest>=7"]
+
+[project.scripts]
+file-organiser = "file_organiser.cli:main"
+file-organizer = "file_organiser.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Sebby1770/file-organiser"
+Repository = "https://github.com/Sebby1770/file-organiser"
+Issues = "https://github.com/Sebby1770/file-organiser/issues"
+
+[tool.setuptools.packages.find]
+include = ["file_organiser*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
