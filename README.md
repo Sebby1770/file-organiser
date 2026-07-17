@@ -4,15 +4,16 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/Sebby1770/file-organiser/actions/workflows/ci.yml/badge.svg)](https://github.com/Sebby1770/file-organiser/actions/workflows/ci.yml)
 
-**Smart CLI to sort, dedupe, and watch folders by type, MIME, and date.**
+**Smart CLI to sort, dedupe, clean, rename, and watch folders by type, MIME, and date.**
 
-Sort messy downloads into category folders (`Images/`, `Documents/`, `Videos/`, …), find content duplicates by SHA-256 (cached + parallel hashing), nest by year/month, prune empty dirs, multi-level undo, search by category/ext/name, and optionally watch a folder for new files — with dry-run, JSON plans, stats, and rich terminal output.
+Sort messy downloads into category folders (`Images/`, `Documents/`, `Videos/`, …), find content duplicates by SHA-256 (cached + parallel hashing with reclaimable-space report), bulk-rename, clean junk, compare folders, nest by year/month, prune empty dirs, multi-level undo, search by category/ext/name, and optionally watch a folder for new files — with dry-run, JSON plans, stats, and rich terminal output (respects `NO_COLOR`).
 
 ## Features
 
 | Feature | Flag / command |
 |--------|-----------------|
 | Organize by type | `organize FOLDER` |
+| Interactive categorize | `organize FOLDER --interactive` |
 | Preview only | `preview FOLDER` |
 | Machine-readable plan | `preview FOLDER --json` |
 | Find by category/ext/name | `find FOLDER --category Images` |
@@ -22,6 +23,12 @@ Sort messy downloads into category folders (`Images/`, `Documents/`, `Videos/`, 
 | Undo last run (stack) | `undo FOLDER` |
 | List undo history | `undo FOLDER --list` |
 | Prune empty dirs | `prune FOLDER` / `--prune-empty` |
+| Clean junk / empty files | `clean FOLDER` (`--apply` to delete) |
+| Bulk rename | `rename FOLDER --pattern "…" --match "*.jpg"` |
+| Slug rename | `rename FOLDER --slug` |
+| Folder diff | `diff FOLDER_A FOLDER_B` |
+| Init config | `init-config` / `init-config --local` |
+| Benchmark | `bench FOLDER` |
 | Recursive | `-r` / `--recursive` |
 | Max scan depth | `--max-depth N` |
 | MIME fallback | `--mime` |
@@ -35,6 +42,7 @@ Sort messy downloads into category folders (`Images/`, `Documents/`, `Videos/`, 
 | JSON/CSV/Markdown report | `--report out.md` |
 | Quiet / verbose | `-q` / `-v` |
 | Find duplicates | `duplicates FOLDER` |
+| Reclaimable space report | always printed after dupe scan |
 | Hash cache (auto) | `.organizer_hash_cache.json` |
 | Parallel hash workers | `duplicates … --workers N` |
 | Delete dupes | `duplicates … --delete-dupes` |
@@ -42,6 +50,7 @@ Sort messy downloads into category folders (`Images/`, `Documents/`, `Videos/`, 
 | Watch mode | `watch FOLDER` (optional extra) |
 | List rules | `categories` |
 | Config discovery | `./.file-organiser.json` or XDG |
+| Colour-free output | `NO_COLOR=1` |
 
 ## Install
 
@@ -131,6 +140,9 @@ file-organiser organize ~/Downloads
 # Simulate first
 file-organiser organize ~/Downloads --dry-run
 
+# Interactive: prompt for category on each Other/unknown file
+file-organiser organize ~/Downloads --interactive
+
 # Recursive (skip folders already named like categories)
 file-organiser organize ~/Downloads -r
 
@@ -162,6 +174,76 @@ file-organiser organize ~/Downloads \
   -v
 ```
 
+### Clean (junk cleanup)
+
+Always **dry-run** unless you pass `--apply`. Never deletes history or hash-cache files.
+
+```bash
+# Preview junk: empty files, .DS_Store, Thumbs.db, desktop.ini, *~, *.tmp, …
+file-organiser clean ~/Downloads
+
+# Actually delete
+file-organiser clean ~/Downloads --apply
+
+# Skip 0-byte files; only name-based junk
+file-organiser clean ~/Downloads --no-empty-files --apply
+
+# Custom junk patterns
+file-organiser clean ~/Downloads --junk "*.log" --junk "._*" --apply
+```
+
+### Bulk rename
+
+Dry-run by default; `--apply` to execute. Renames are recorded in history for `undo`.
+
+```bash
+# Pattern tokens: {n}, {n:04d}, {name}, {stem}, {ext}, {ext_no_dot}
+file-organiser rename ~/Photos --pattern "IMG_{n:04d}{ext}" --match "*.jpg"
+file-organiser rename ~/Photos --pattern "IMG_{n:04d}{ext}" --match "*.jpg" --apply
+
+# Slugify: lowercase + spaces → hyphens
+file-organiser rename ~/Downloads --slug --apply
+```
+
+### Diff (compare two folders)
+
+```bash
+file-organiser diff ~/Backup ~/Documents
+file-organiser diff ./folder_a ./folder_b --no-recursive
+```
+
+Reports:
+
+- **Only in A** / **Only in B** (relative paths)
+- **Same name, different content** (hash mismatch)
+- **Identical** (same relative path + same SHA-256)
+
+Useful for backup checks.
+
+### Init config
+
+```bash
+# Write ~/.config/file-organiser/rules.json (XDG)
+file-organiser init-config
+
+# Write ./.file-organiser.json in the current directory
+file-organiser init-config --local
+
+# Overwrite existing
+file-organiser init-config --force
+```
+
+The file is a JSON object of category → extension lists (same format as custom `--config`). See **Custom rules** below.
+
+### Benchmark
+
+```bash
+file-organiser bench ~/Downloads
+file-organiser bench ~/Downloads --limit 50
+```
+
+Times a folder scan and SHA-256 hashing of the first N files; prints throughput (files/s, MiB/s).
+
 ### Stats
 
 ```bash
@@ -179,7 +261,7 @@ file-organiser undo ~/Downloads           # pop most recent snapshot
 file-organiser undo ~/Downloads --list    # show history stack
 ```
 
-Each successful `organize` **pushes** a snapshot onto a stack in `.organizer_history.json` (last 10 kept). `undo` pops the most recent. Works for move, copy, and symlink modes. Legacy single-snapshot history files are still supported.
+Each successful `organize` / `rename --apply` **pushes** a snapshot onto a stack in `.organizer_history.json` (last 10 kept). `undo` pops the most recent. Works for move, copy, symlink, and rename modes. Legacy single-snapshot history files are still supported.
 
 ### Prune empty directories
 
@@ -194,6 +276,7 @@ Only removes **empty** subdirectories. Never deletes the root folder or any non-
 
 ```bash
 # Find files with identical content (SHA-256, parallel + hash cache)
+# Always prints reclaimable space if all but the keeper were deleted
 file-organiser duplicates ~/Downloads
 file-organiser duplicates ~/Downloads --workers 4
 
@@ -213,6 +296,8 @@ file-organiser duplicates ~/Downloads --no-cache
 
 Hash results are cached in `.organizer_hash_cache.json` inside the scanned folder. Entries are reused when path + mtime + size are unchanged, so re-runs are much faster.
 
+After every scan (even without `--delete-dupes`), the tool prints **reclaimable** bytes and the number of extra copies that could be removed while keeping one file per group.
+
 If `--trash` is set but `send2trash` is not installed, the tool **falls back to permanent delete** and prints a warning with the install hint.
 
 ### Watch (optional)
@@ -231,6 +316,14 @@ file-organiser categories
 file-organiser categories --config rules.example.json
 ```
 
+### Colour / NO_COLOR
+
+Set `NO_COLOR` (any non-empty value) to disable Rich colour output — useful for logs and CI:
+
+```bash
+NO_COLOR=1 file-organiser stats ~/Downloads
+```
+
 ## Custom rules & config discovery
 
 JSON object mapping category → list of extensions (dot optional, case-insensitive):
@@ -245,6 +338,7 @@ JSON object mapping category → list of extensions (dot optional, case-insensit
 
 ```bash
 file-organiser organize ~/Downloads --config rules.example.json
+file-organiser init-config --local   # create ./.file-organiser.json from defaults
 ```
 
 When **`--config` is omitted**, rules are discovered in order:
@@ -253,7 +347,7 @@ When **`--config` is omitted**, rules are discovered in order:
 2. `~/.config/file-organiser/rules.json` (or `$XDG_CONFIG_HOME/file-organiser/rules.json`)
 3. Built-in defaults
 
-Unmatched extensions go to `Other/`. With `--mime`, unknown/missing extensions also try `mimetypes.guess_type` (e.g. `image/*` → Images, `application/pdf` → Documents).
+Unmatched extensions go to `Other/`. With `--mime`, unknown/missing extensions also try `mimetypes.guess_type` (e.g. `image/*` → Images, `application/pdf` → Documents). With `organize --interactive`, each Other file is prompted for a category (default Other; type `skip` to leave it).
 
 ### Default categories
 
@@ -301,10 +395,15 @@ file-organiser/
 │   ├── __main__.py
 │   ├── cli.py           # argparse entry
 │   ├── organizer.py     # organize / preview / find / tree / extensions / undo / stats / prune
-│   ├── rules.py         # defaults, MIME map, config discovery
+│   ├── rules.py         # defaults, MIME map, config discovery, init-config
 │   ├── history.py       # multi-level undo stack
 │   ├── scanner.py       # walk, filters, include/exclude, max-depth, size parse
-│   ├── duplicates.py    # parallel SHA-256 dupe finder + hash cache + trash
+│   ├── duplicates.py    # parallel SHA-256 dupe finder + hash cache + trash + reclaimable
+│   ├── clean.py         # junk / empty-file cleanup
+│   ├── rename.py        # bulk rename + slug
+│   ├── diff.py          # folder comparison
+│   ├── bench.py         # scan + hash benchmark
+│   ├── console_util.py  # NO_COLOR-aware Console
 │   ├── watch.py         # optional watchdog
 │   └── report.py        # JSON/CSV/Markdown reports
 ├── tests/
@@ -317,10 +416,11 @@ file-organiser/
 ## Safety
 
 - Does **not** follow symlinks (avoids loops).
-- Skips **hidden** files/dirs (names starting with `.`) and internal metadata (history, hash cache).
+- Skips **hidden** files/dirs (names starting with `.`) and internal metadata (history, hash cache) during organize/scan — except `clean`, which can target known junk names like `.DS_Store` while still protecting history/hash cache.
 - Recursive mode **skips** existing category folders so files are not re-sorted endlessly.
 - Default conflict strategy **renames** (`photo (1).jpg`) — nothing overwritten unless you pass `--on-conflict overwrite`.
 - `prune` / `--prune-empty` only remove **empty** directories.
+- `clean` and `rename` are **dry-run by default**; pass `--apply` to execute.
 - Prefer `--dry-run` before destructive runs (especially `--delete-dupes`).
 - Prefer `--trash` with `file-organiser[trash]` so duplicates go to the OS recycle bin.
 

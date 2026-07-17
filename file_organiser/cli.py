@@ -6,10 +6,13 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Sequence
 
-from rich.console import Console
 from rich.table import Table
 
 from . import __version__
+from .bench import benchmark_folder
+from .clean import DEFAULT_JUNK_PATTERNS, clean_folder
+from .console_util import make_console
+from .diff import diff_folders
 from .duplicates import default_workers, find_and_report_duplicates
 from .organizer import (
     find_files,
@@ -21,7 +24,8 @@ from .organizer import (
     show_tree,
     undo,
 )
-from .rules import OTHER_CATEGORY, discover_config, load_rules
+from .rename import rename_files
+from .rules import OTHER_CATEGORY, discover_config, init_config, load_rules
 from .scanner import parse_size
 
 
@@ -160,8 +164,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="file-organiser",
         description=(
-            "Smart CLI to sort, dedupe, and watch folders by type and date. "
-            "Automatically sorts files into category folders (Images, Documents, …)."
+            "Smart CLI to sort, dedupe, clean, rename, and watch folders by type "
+            "and date. Automatically sorts files into category folders "
+            "(Images, Documents, …)."
         ),
         epilog="Example: file-organiser organize ~/Downloads --dry-run",
     )
@@ -189,6 +194,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Show what would happen without moving any files.",
+    )
+    sp_organize.add_argument(
+        "--interactive",
+        "-i",
+        action="store_true",
+        help=(
+            "For each Other/unknown file, prompt for a category "
+            "(default Other; type 'skip' to leave it)."
+        ),
     )
 
     # --- preview ---
@@ -285,7 +299,6 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_folder_arg(sp_ext)
-    # No config needed for pure extension inventory, but allow scan filters
     sp_ext.add_argument(
         "-r",
         "--recursive",
@@ -348,7 +361,6 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="Show top N largest files (default: 10).",
     )
-    # stats defaults to recursive
     sp_stats.set_defaults(recursive=True)
     sp_stats.add_argument(
         "--no-recursive",
@@ -393,17 +405,251 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_verbosity(sp_prune)
 
+    # --- clean ---
+    sp_clean = subparsers.add_parser(
+        "clean",
+        help="Safe junk cleanup (empty files, .DS_Store, Thumbs.db, …).",
+        description=(
+            "Remove empty (0-byte) files and common junk names. "
+            "Always dry-run unless --apply. Never touches history/hash cache."
+        ),
+    )
+    _add_folder_arg(sp_clean)
+    sp_clean.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually delete junk (default is dry-run).",
+    )
+    sp_clean.add_argument(
+        "--empty-files",
+        action="store_true",
+        default=True,
+        help="Remove 0-byte files (default: on).",
+    )
+    sp_clean.add_argument(
+        "--no-empty-files",
+        action="store_false",
+        dest="empty_files",
+        help="Do not remove empty files.",
+    )
+    sp_clean.add_argument(
+        "--junk",
+        action="append",
+        default=None,
+        metavar="GLOB",
+        help=(
+            "Junk name pattern to remove (repeatable). "
+            f"Default: {', '.join(DEFAULT_JUNK_PATTERNS[:5])}, …"
+        ),
+    )
+    sp_clean.add_argument(
+        "-r",
+        "--recursive",
+        action="store_true",
+        default=True,
+        help="Scan nested folders (default: on).",
+    )
+    sp_clean.add_argument(
+        "--no-recursive",
+        action="store_false",
+        dest="recursive",
+        help="Only scan the top level of the folder.",
+    )
+    sp_clean.add_argument(
+        "--max-depth",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Limit recursive scan depth (0 = top level only).",
+    )
+    sp_clean.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="Exclude files/dirs matching GLOB (repeatable).",
+    )
+    _add_verbosity(sp_clean)
+
+    # --- rename ---
+    sp_rename = subparsers.add_parser(
+        "rename",
+        help="Bulk rename files with a pattern or --slug.",
+        description=(
+            "Rename files using a template pattern (e.g. IMG_{n:04d}{ext}) "
+            "or slugify names. Dry-run by default; --apply to execute. "
+            "Recorded in history for undo."
+        ),
+    )
+    _add_folder_arg(sp_rename)
+    sp_rename.add_argument(
+        "--pattern",
+        type=str,
+        default=None,
+        metavar="TMPL",
+        help='Rename template, e.g. "IMG_{n:04d}{ext}". Tokens: {n}, {n:04d}, {name}, {stem}, {ext}, {ext_no_dot}.',
+    )
+    sp_rename.add_argument(
+        "--slug",
+        action="store_true",
+        help="Lowercase and replace spaces/special chars with '-'.",
+    )
+    sp_rename.add_argument(
+        "--match",
+        type=str,
+        default=None,
+        metavar="GLOB",
+        help='Only rename files matching name glob (e.g. "*.jpg").',
+    )
+    sp_rename.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually rename (default is dry-run).",
+    )
+    sp_rename.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show renames without applying (default behaviour).",
+    )
+    sp_rename.add_argument(
+        "-r",
+        "--recursive",
+        action="store_true",
+        help="Include nested folders.",
+    )
+    sp_rename.add_argument(
+        "--max-depth",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Limit recursive scan depth.",
+    )
+    _add_verbosity(sp_rename)
+
+    # --- diff ---
+    sp_diff = subparsers.add_parser(
+        "diff",
+        help="Compare two folders (only-A, only-B, different hash, identical).",
+        description=(
+            "Compare two folders by relative path and content hash. "
+            "Useful for backup verification."
+        ),
+    )
+    sp_diff.add_argument(
+        "folder_a",
+        type=Path,
+        help="First folder (A).",
+    )
+    sp_diff.add_argument(
+        "folder_b",
+        type=Path,
+        help="Second folder (B).",
+    )
+    sp_diff.add_argument(
+        "-r",
+        "--recursive",
+        action="store_true",
+        default=True,
+        help="Scan nested folders (default: on).",
+    )
+    sp_diff.add_argument(
+        "--no-recursive",
+        action="store_false",
+        dest="recursive",
+        help="Only scan the top level of each folder.",
+    )
+    sp_diff.add_argument(
+        "--max-depth",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Limit recursive scan depth.",
+    )
+    sp_diff.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="Exclude files/dirs matching GLOB (repeatable).",
+    )
+    _add_verbosity(sp_diff)
+
+    # --- init-config ---
+    sp_init = subparsers.add_parser(
+        "init-config",
+        help="Write default rules.json config file.",
+        description=(
+            "Write default category rules to "
+            "~/.config/file-organiser/rules.json (or ./.file-organiser.json with --local)."
+        ),
+    )
+    sp_init.add_argument(
+        "--local",
+        action="store_true",
+        help="Write ./.file-organiser.json in the current directory instead of XDG.",
+    )
+    sp_init.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing config file.",
+    )
+
+    # --- bench ---
+    sp_bench = subparsers.add_parser(
+        "bench",
+        help="Benchmark scan + hash throughput for a folder.",
+        description=(
+            "Time a folder scan and SHA-256 hashing of the first N files; "
+            "print throughput stats."
+        ),
+    )
+    _add_folder_arg(sp_bench)
+    sp_bench.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        metavar="N",
+        help="Hash at most N files (default: 100).",
+    )
+    sp_bench.add_argument(
+        "-r",
+        "--recursive",
+        action="store_true",
+        default=True,
+        help="Scan nested folders (default: on).",
+    )
+    sp_bench.add_argument(
+        "--no-recursive",
+        action="store_false",
+        dest="recursive",
+        help="Only scan the top level of the folder.",
+    )
+    sp_bench.add_argument(
+        "--max-depth",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Limit recursive scan depth.",
+    )
+    sp_bench.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="Exclude files/dirs matching GLOB (repeatable).",
+    )
+    _add_verbosity(sp_bench)
+
     # --- duplicates ---
     sp_dup = subparsers.add_parser(
         "duplicates",
         help="Find duplicate files by content (SHA-256).",
         description=(
             "Scan for files with identical content and optionally delete extras. "
-            "Uses an on-disk hash cache for faster re-runs."
+            "Uses an on-disk hash cache for faster re-runs. Always reports reclaimable space."
         ),
     )
     _add_folder_arg(sp_dup)
-    # Recursive by default for duplicates; --no-recursive to limit to top level
     sp_dup.add_argument(
         "-r",
         "--recursive",
@@ -508,7 +754,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _resolve_min_size(value: Optional[str], console: Console) -> int:
+def _resolve_min_size(value: Optional[str], console) -> int:
     if not value:
         return 0
     try:
@@ -524,7 +770,7 @@ def _resolve_rules(config_arg: Optional[Path]) -> dict:
     return load_rules(path)
 
 
-def list_categories(console: Console, config: Optional[Path] = None) -> None:
+def list_categories(console, config: Optional[Path] = None) -> None:
     path = discover_config(config)
     rules = load_rules(path)
     table = Table(title="File categories", header_style="bold cyan")
@@ -540,7 +786,7 @@ def list_categories(console: Console, config: Optional[Path] = None) -> None:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    console = Console()
+    console = make_console()
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
 
@@ -548,6 +794,35 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if args.command == "categories":
             cfg = args.config.expanduser().resolve() if args.config else None
             list_categories(console, cfg)
+            return 0
+
+        if args.command == "init-config":
+            try:
+                path = init_config(local=args.local, force=args.force)
+            except FileExistsError as e:
+                console.print(f"[yellow]{e}[/yellow]")
+                return 1
+            console.print(f"[green]✓[/green] Wrote config to [cyan]{path}[/cyan]")
+            console.print(
+                "[dim]Edit the JSON to customize categories, then use "
+                "`file-organiser organize …` (auto-discovered) or "
+                "`--config PATH`. See README for the format.[/dim]"
+            )
+            return 0
+
+        if args.command == "diff":
+            folder_a = args.folder_a.expanduser().resolve()
+            folder_b = args.folder_b.expanduser().resolve()
+            quiet = getattr(args, "quiet", False)
+            diff_folders(
+                folder_a,
+                folder_b,
+                console,
+                recursive=args.recursive,
+                exclude=getattr(args, "exclude", None) or None,
+                max_depth=getattr(args, "max_depth", None),
+                quiet=quiet,
+            )
             return 0
 
         folder: Path = args.folder.expanduser().resolve()
@@ -568,6 +843,46 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 folder,
                 console,
                 dry_run=getattr(args, "dry_run", False),
+                quiet=quiet,
+            )
+            return 0
+
+        if args.command == "clean":
+            clean_folder(
+                folder,
+                console,
+                apply=getattr(args, "apply", False),
+                empty_files=getattr(args, "empty_files", True),
+                junk_patterns=getattr(args, "junk", None),
+                recursive=getattr(args, "recursive", True),
+                exclude=getattr(args, "exclude", None) or None,
+                max_depth=getattr(args, "max_depth", None),
+                quiet=quiet,
+            )
+            return 0
+
+        if args.command == "rename":
+            rename_files(
+                folder,
+                console,
+                pattern=getattr(args, "pattern", None),
+                slug=getattr(args, "slug", False),
+                match=getattr(args, "match", None),
+                apply=getattr(args, "apply", False),
+                recursive=getattr(args, "recursive", False),
+                max_depth=getattr(args, "max_depth", None),
+                quiet=quiet,
+            )
+            return 0
+
+        if args.command == "bench":
+            benchmark_folder(
+                folder,
+                console,
+                limit=getattr(args, "limit", 100),
+                recursive=getattr(args, "recursive", True),
+                exclude=getattr(args, "exclude", None) or None,
+                max_depth=getattr(args, "max_depth", None),
                 quiet=quiet,
             )
             return 0
@@ -702,6 +1017,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 use_mime=use_mime,
                 max_depth=max_depth,
                 prune_empty=getattr(args, "prune_empty", False),
+                interactive=getattr(args, "interactive", False),
                 quiet=quiet,
                 verbose=verbose,
             )

@@ -190,3 +190,50 @@ def all_category_names(rules: Dict[str, List[str]] | None = None) -> List[str]:
     if OTHER_CATEGORY not in names:
         names.append(OTHER_CATEGORY)
     return sorted(names)
+
+
+def xdg_config_path() -> Path:
+    """Return the default user config path for rules.json."""
+    import os
+
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        return Path(xdg) / XDG_CONFIG_REL
+    return Path.home() / ".config" / XDG_CONFIG_REL
+
+
+def local_config_path(cwd: Path | None = None) -> Path:
+    """Return path for a project-local ``.file-organiser.json``."""
+    base = cwd if cwd is not None else Path.cwd()
+    return base / LOCAL_CONFIG_NAME
+
+
+def init_config(
+    *,
+    local: bool = False,
+    force: bool = False,
+    cwd: Path | None = None,
+) -> Path:
+    """Write default rules JSON to XDG path or local ``.file-organiser.json``.
+
+    Returns the path written. Raises ``FileExistsError`` if the file exists
+    and *force* is False.
+    """
+    if local:
+        path = local_config_path(cwd)
+    else:
+        path = xdg_config_path()
+
+    path = path.expanduser()
+    if path.exists() and not force:
+        raise FileExistsError(
+            f"Config already exists: {path} (use --force to overwrite)"
+        )
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Write pretty JSON of DEFAULT_RULES
+    payload = {k: list(v) for k, v in DEFAULT_RULES.items()}
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+        f.write("\n")
+    return path

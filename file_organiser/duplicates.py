@@ -20,7 +20,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from .scanner import HASH_CACHE_FILENAME, iter_files
+from .scanner import HASH_CACHE_FILENAME, format_size, iter_files
 
 KeepPolicy = Literal["oldest", "newest"]
 
@@ -287,6 +287,38 @@ def choose_keeper(paths: List[Path], keep: KeepPolicy = "oldest") -> Path:
     return min(paths, key=_mtime)
 
 
+def reclaimable_bytes(
+    groups: Dict[str, List[Path]],
+    *,
+    keep: KeepPolicy = "oldest",
+) -> Tuple[int, int]:
+    """Compute reclaimable space if all but the keeper were deleted.
+
+    Returns ``(total_reclaimable_bytes, file_count_that_could_be_removed)``.
+    Size is taken from the non-keeper files (same content as keeper, so
+    each extra copy's size counts fully).
+    """
+    total = 0
+    count = 0
+    for paths in groups.values():
+        if len(paths) < 2:
+            continue
+        keeper = choose_keeper(paths, keep=keep)
+        for path in paths:
+            if path == keeper:
+                continue
+            try:
+                total += path.stat().st_size
+            except OSError:
+                # Fall back to keeper size if dupe unreadable
+                try:
+                    total += keeper.stat().st_size
+                except OSError:
+                    pass
+            count += 1
+    return total, count
+
+
 def find_and_report_duplicates(
     folder: Path,
     console: Console,
@@ -355,6 +387,14 @@ def find_and_report_duplicates(
     console.print(table)
     console.print(
         f"[bold]{len(groups)}[/bold] group(s), [bold]{total_files}[/bold] file(s) involved"
+    )
+
+    # Always report reclaimable space if all but keeper deleted
+    reclaim, reclaim_count = reclaimable_bytes(groups, keep=keep)
+    console.print(
+        f"[bold]Reclaimable:[/bold] {format_size(reclaim)} "
+        f"({reclaim:,} bytes) across {reclaim_count} duplicate file(s) "
+        f"(keeping {keep} per group)"
     )
 
     if not delete_dupes:
