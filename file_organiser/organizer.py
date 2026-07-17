@@ -463,6 +463,128 @@ def prune_empty_dirs(
     return removed
 
 
+def _prompt_category(
+    path: Path,
+    categories: Sequence[str],
+    default: str = "Other",
+) -> Optional[str]:
+    """Prompt the user for a category. Returns None to skip the file."""
+    cats = list(categories)
+    if default not in cats:
+        cats = list(cats) + [default]
+    listing = ", ".join(cats)
+    while True:
+        try:
+            raw = input(
+                f"  {path.name} → category [{default}] "
+                f"(or 'skip' / one of: {listing}): "
+            ).strip()
+        except EOFError:
+            return default
+        if not raw:
+            return default
+        if raw.lower() in ("skip", "s", "-"):
+            return None
+        # Case-insensitive match against known categories
+        for c in cats:
+            if c.lower() == raw.lower():
+                return c
+        # Allow free-form category names
+        return raw
+
+
+def plan_moves_interactive(
+    folder: Path,
+    rules: Dict[str, List[str]],
+    console: Console,
+    *,
+    recursive: bool = False,
+    exclude: Sequence[str] | None = None,
+    include: Sequence[str] | None = None,
+    min_size: int = 0,
+    by_date: bool = False,
+    date_source: DateSource = "mtime",
+    on_conflict: ConflictStrategy = "rename",
+    use_mime: bool = False,
+    max_depth: int | None = None,
+) -> Tuple[List[Tuple[Path, Path]], List[str]]:
+    """Like plan_moves, but prompt for category on Other/unknown files."""
+    from .rules import OTHER_CATEGORY
+
+    grouped = scan_folder(
+        folder,
+        rules,
+        recursive=recursive,
+        exclude=exclude,
+        include=include,
+        min_size=min_size,
+        use_mime=use_mime,
+        max_depth=max_depth,
+    )
+    category_choices = sorted(rules.keys())
+    if OTHER_CATEGORY not in category_choices:
+        category_choices.append(OTHER_CATEGORY)
+
+    # Flatten to (src, category) with interactive override for Other
+    assignments: List[Tuple[Path, str]] = []
+    other_files = list(grouped.get(OTHER_CATEGORY, []))
+    if other_files:
+        console.print(
+            f"[cyan]Interactive:[/cyan] {len(other_files)} file(s) in "
+            f"{OTHER_CATEGORY} — pick a category or skip "
+            f"(default: {OTHER_CATEGORY})"
+        )
+    for category, files in grouped.items():
+        if category != OTHER_CATEGORY:
+            for src in files:
+                assignments.append((src, category))
+            continue
+        for src in files:
+            chosen = _prompt_category(src, category_choices, default=OTHER_CATEGORY)
+            if chosen is None:
+                console.print(f"  [dim]skipped[/dim] {src.name}")
+                continue
+            assignments.append((src, chosen))
+
+    pairs: List[Tuple[Path, Path]] = []
+    skips: List[str] = []
+    planned: set[Path] = set()
+
+    for src, category in assignments:
+        dest_dir = target_directory(
+            folder, category, src, by_date=by_date, date_source=date_source
+        )
+        dest = dest_dir / src.name
+        try:
+            if src.resolve() == dest.resolve():
+                continue
+        except OSError:
+            pass
+
+        if dest in planned or dest.exists():
+            if on_conflict == "skip" and (dest.exists() or dest in planned):
+                skips.append(f"skip (exists): {src.name}")
+                continue
+            if on_conflict == "overwrite" and dest not in planned:
+                pass
+            else:
+                candidate = dest
+                if dest.exists() or dest in planned:
+                    stem, suffix, parent = dest.stem, dest.suffix, dest.parent
+                    counter = 1
+                    while True:
+                        candidate = parent / f"{stem} ({counter}){suffix}"
+                        if not candidate.exists() and candidate not in planned:
+                            break
+                        counter += 1
+                dest = candidate
+
+        planned.add(dest)
+        pairs.append((src, dest))
+
+    return pairs, skips
+
+
 def organize(
     folder: Path,
     rules: Dict[str, List[str]],
@@ -482,6 +604,7 @@ def organize(
     use_mime: bool = False,
     max_depth: int | None = None,
     prune_empty: bool = False,
+    interactive: bool = False,
     quiet: bool = False,
     verbose: bool = False,
 ) -> int:
@@ -489,6 +612,8 @@ def organize(
 
     *symlink* creates a symlink at the destination pointing at the source
     (sources stay in place). Mutually preferred over copy when both set.
+
+    When *interactive* is True, prompt for a category for each Other file.
 
     Returns the number of files successfully processed.
     """
@@ -501,19 +626,35 @@ def organize(
         if verbose:
             console.print("[yellow]Both --symlink and --copy set; using symlink.[/yellow]")
 
-    pairs, skips = plan_moves(
-        folder,
-        rules,
-        recursive=recursive,
-        exclude=exclude,
-        include=include,
-        min_size=min_size,
-        by_date=by_date,
-        date_source=date_source,
-        on_conflict=on_conflict,
-        use_mime=use_mime,
-        max_depth=max_depth,
-    )
+    if interactive:
+        pairs, skips = plan_moves_interactive(
+            folder,
+            rules,
+            console,
+            recursive=recursive,
+            exclude=exclude,
+            include=include,
+            min_size=min_size,
+            by_date=by_date,
+            date_source=date_source,
+            on_conflict=on_conflict,
+            use_mime=use_mime,
+            max_depth=max_depth,
+        )
+    else:
+        pairs, skips = plan_moves(
+            folder,
+            rules,
+            recursive=recursive,
+            exclude=exclude,
+            include=include,
+            min_size=min_size,
+            by_date=by_date,
+            date_source=date_source,
+            on_conflict=on_conflict,
+            use_mime=use_mime,
+            max_depth=max_depth,
+        )
 
     if not pairs and not skips:
         console.print(f"[yellow]Nothing to organize in[/yellow] {folder}")
@@ -640,7 +781,7 @@ def undo(
     """Revert the most recent organize operation in this folder.
 
     For copy/symlink mode, removes the copies/links (does not delete originals).
-    For move mode, moves files back to original locations.
+    For move/rename mode, moves files back to original locations.
 
     With *list_only*, prints the history stack and returns 0 without undoing.
     """
@@ -705,6 +846,7 @@ def undo(
                     current.unlink()
                     restored += 1
                 else:
+                    # move or rename: put file back at original path
                     original.parent.mkdir(parents=True, exist_ok=True)
                     final = unique_destination(original)
                     shutil.move(str(current), str(final))
@@ -719,7 +861,7 @@ def undo(
 
     remaining = history.load_stack()
     if not quiet:
-        action = "Removed" if mode in ("copy", "symlink") else "Restored"
+        action = "Removed" if mode in ("copy", "symlink") else "Restored"  # move/rename
         extra = (
             f" ({len(remaining)} snapshot(s) remaining)"
             if remaining
