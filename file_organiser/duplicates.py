@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -19,10 +20,12 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from .history import HISTORY_FILENAME
-from .scanner import iter_files, matches_exclude
+from .scanner import HASH_CACHE_FILENAME, iter_files
 
 KeepPolicy = Literal["oldest", "newest"]
+
+# Stats for tests / callers that want to inspect cache effectiveness
+CacheStats = Dict[str, int]
 
 
 def default_workers() -> int:
@@ -43,10 +46,133 @@ def file_sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
     return h.hexdigest()
 
 
-def _hash_safe(path: Path) -> Tuple[Path, Optional[str]]:
-    """Hash a file; return (path, digest) or (path, None) on error."""
+def send2trash_available() -> bool:
+    """Return True if the optional send2trash package is importable."""
     try:
-        return path, file_sha256(path)
+        import send2trash  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def delete_path(path: Path, *, use_trash: bool = False) -> str:
+    """Delete *path*, optionally via OS trash.
+
+    Returns the action taken: ``"trashed"`` or ``"deleted"``.
+
+    When *use_trash* is True and send2trash is installed, moves to trash.
+    Otherwise permanently deletes (caller should warn when trash was requested
+    but unavailable).
+    """
+    if use_trash and send2trash_available():
+        from send2trash import send2trash
+
+        send2trash(str(path))
+        return "trashed"
+    path.unlink()
+    return "deleted"
+
+
+class HashCache:
+    """Persist path → (mtime, size, sha256) for fast re-runs of duplicate scans.
+
+    Cache lives at ``folder / .organizer_hash_cache.json``.
+    """
+
+    def __init__(self, folder: Path) -> None:
+        self.folder = folder
+        self.path = folder / HASH_CACHE_FILENAME
+        # key = absolute path string
+        self._entries: Dict[str, Dict[str, object]] = {}
+        self.hits = 0
+        self.misses = 0
+        self._load()
+
+    def _load(self) -> None:
+        if not self.path.exists():
+            return
+        try:
+            with self.path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and isinstance(data.get("entries"), dict):
+                self._entries = data["entries"]
+            elif isinstance(data, dict):
+                # Flat format: path → record
+                self._entries = {
+                    k: v for k, v in data.items() if isinstance(v, dict)
+                }
+        except (json.JSONDecodeError, OSError):
+            self._entries = {}
+
+    def save(self) -> None:
+        payload = {
+            "version": 1,
+            "entries": self._entries,
+        }
+        try:
+            with self.path.open("w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+        except OSError:
+            pass
+
+    def get(self, path: Path) -> Optional[str]:
+        """Return cached sha256 if mtime+size still match, else None."""
+        key = str(path.resolve()) if path.exists() else str(path)
+        try:
+            st = path.stat()
+            mtime = st.st_mtime
+            size = st.st_size
+        except OSError:
+            return None
+        rec = self._entries.get(key)
+        if not rec:
+            # Try non-resolved path key as fallback
+            rec = self._entries.get(str(path))
+        if not rec:
+            self.misses += 1
+            return None
+        try:
+            if float(rec["mtime"]) == float(mtime) and int(rec["size"]) == int(size):
+                digest = str(rec["sha256"])
+                self.hits += 1
+                return digest
+        except (KeyError, TypeError, ValueError):
+            pass
+        self.misses += 1
+        return None
+
+    def put(self, path: Path, digest: str) -> None:
+        try:
+            st = path.stat()
+            mtime = st.st_mtime
+            size = st.st_size
+        except OSError:
+            return
+        key = str(path.resolve())
+        self._entries[key] = {
+            "mtime": mtime,
+            "size": size,
+            "sha256": digest,
+        }
+
+    def stats(self) -> CacheStats:
+        return {"hits": self.hits, "misses": self.misses, "entries": len(self._entries)}
+
+
+def _hash_safe(
+    path: Path,
+    cache: Optional[HashCache] = None,
+) -> Tuple[Path, Optional[str]]:
+    """Hash a file (using cache when possible); return (path, digest) or (path, None)."""
+    if cache is not None:
+        cached = cache.get(path)
+        if cached is not None:
+            return path, cached
+    try:
+        digest = file_sha256(path)
+        if cache is not None:
+            cache.put(path, digest)
+        return path, digest
     except OSError:
         return path, None
 
@@ -56,21 +182,25 @@ def find_duplicates(
     *,
     recursive: bool = True,
     exclude: Sequence[str] | None = None,
+    include: Sequence[str] | None = None,
     min_size: int = 0,
     max_depth: int | None = None,
     workers: int | None = None,
     console: Console | None = None,
     show_progress: bool = False,
+    use_cache: bool = True,
+    cache: Optional[HashCache] = None,
 ) -> Dict[str, List[Path]]:
     """Find duplicate files by SHA-256 content hash.
 
-    Uses a thread pool for parallel hashing. Returns only groups with 2+
-    files, keyed by hash.
+    Uses a thread pool for parallel hashing and an optional on-disk hash cache
+    keyed by path + mtime + size. Returns only groups with 2+ files, keyed by hash.
     """
     files = iter_files(
         folder,
         recursive=recursive,
         exclude=exclude,
+        include=include,
         min_size=min_size,
         category_names=None,
         skip_category_folders=False,
@@ -94,12 +224,16 @@ def find_duplicates(
     if not to_hash:
         return {}
 
+    active_cache: Optional[HashCache] = None
+    if use_cache:
+        active_cache = cache if cache is not None else HashCache(folder)
+
     n_workers = workers if workers is not None else default_workers()
     n_workers = max(1, n_workers)
 
     if n_workers == 1 or len(to_hash) == 1:
         for path in to_hash:
-            p, digest = _hash_safe(path)
+            p, digest = _hash_safe(path, active_cache)
             if digest is not None:
                 by_hash[digest].append(p)
     else:
@@ -120,7 +254,9 @@ def find_duplicates(
 
         try:
             with ThreadPoolExecutor(max_workers=n_workers) as pool:
-                futures = {pool.submit(_hash_safe, p): p for p in to_hash}
+                futures = {
+                    pool.submit(_hash_safe, p, active_cache): p for p in to_hash
+                }
                 for fut in as_completed(futures):
                     p, digest = fut.result()
                     if digest is not None:
@@ -130,6 +266,9 @@ def find_duplicates(
         finally:
             if progress_ctx is not None:
                 progress_ctx.stop()
+
+    if active_cache is not None:
+        active_cache.save()
 
     return {h: paths for h, paths in by_hash.items() if len(paths) >= 2}
 
@@ -154,14 +293,21 @@ def find_and_report_duplicates(
     *,
     recursive: bool = True,
     exclude: Sequence[str] | None = None,
+    include: Sequence[str] | None = None,
     min_size: int = 0,
     max_depth: int | None = None,
     workers: int | None = None,
     delete_dupes: bool = False,
     keep: KeepPolicy = "oldest",
     dry_run: bool = False,
+    use_trash: bool = False,
+    use_cache: bool = True,
 ) -> int:
     """Find duplicates, print a table, optionally delete extras.
+
+    When *use_trash* is True and send2trash is available, duplicates are moved
+    to the OS trash instead of permanent delete. If trash was requested but
+    send2trash is missing, falls back to permanent delete with a warning.
 
     Returns the number of duplicate groups found.
     """
@@ -170,16 +316,25 @@ def find_and_report_duplicates(
         return 0
 
     console.print(f"Scanning for duplicates in [cyan]{folder}[/cyan] ...")
+    cache = HashCache(folder) if use_cache else None
     groups = find_duplicates(
         folder,
         recursive=recursive,
         exclude=exclude,
+        include=include,
         min_size=min_size,
         max_depth=max_depth,
         workers=workers,
         console=console,
         show_progress=True,
+        use_cache=use_cache,
+        cache=cache,
     )
+
+    if cache is not None and (cache.hits or cache.misses):
+        console.print(
+            f"[dim]Hash cache: {cache.hits} hit(s), {cache.misses} miss(es)[/dim]"
+        )
 
     if not groups:
         console.print("[green]No duplicate files found.[/green]")
@@ -205,10 +360,20 @@ def find_and_report_duplicates(
     if not delete_dupes:
         return len(groups)
 
+    trash_ok = send2trash_available()
+    actually_trash = bool(use_trash and trash_ok)
+    if use_trash and not trash_ok:
+        console.print(
+            "[yellow]Warning:[/yellow] send2trash not installed — "
+            "permanently deleting instead.\n"
+            "  Install: [bold]pip install file-organiser[trash][/bold]"
+        )
+
     deleted = 0
     errors: List[str] = []
     mode_tag = "[yellow](dry-run)[/yellow] " if dry_run else ""
-    console.print(f"{mode_tag}Deleting duplicates (keeping {keep})...")
+    action_word = "trash" if actually_trash else "delete"
+    console.print(f"{mode_tag}{action_word.capitalize()}ing duplicates (keeping {keep})...")
 
     for digest, paths in groups.items():
         keeper = choose_keeper(paths, keep=keep)
@@ -217,18 +382,22 @@ def find_and_report_duplicates(
                 continue
             try:
                 if dry_run:
-                    console.print(f"  [dim]would delete[/dim] {path}")
+                    verb = "would trash" if actually_trash else "would delete"
+                    console.print(f"  [dim]{verb}[/dim] {path}")
                 else:
-                    path.unlink()
-                    console.print(f"  [red]deleted[/red] {path}")
+                    action = delete_path(path, use_trash=actually_trash)
+                    color = "yellow" if action == "trashed" else "red"
+                    console.print(f"  [{color}]{action}[/{color}] {path}")
                 deleted += 1
             except OSError as e:
                 errors.append(f"{path}: {e}")
 
     if dry_run:
-        console.print(f"[yellow]Dry run:[/yellow] would delete {deleted} file(s).")
+        verb = "trash" if actually_trash else "delete"
+        console.print(f"[yellow]Dry run:[/yellow] would {verb} {deleted} file(s).")
     else:
-        console.print(f"[green]✓[/green] Deleted {deleted} duplicate file(s).")
+        verb = "Trashed" if actually_trash else "Deleted"
+        console.print(f"[green]✓[/green] {verb} {deleted} duplicate file(s).")
     if errors:
         console.print(f"[red]Encountered {len(errors)} error(s):[/red]")
         for err in errors:

@@ -11,6 +11,10 @@ from typing import Dict, Iterable, List, Sequence, Set
 from .history import HISTORY_FILENAME
 from .rules import category_for_path
 
+# Internal metadata files that must never be organized / hashed as user content.
+HASH_CACHE_FILENAME = ".organizer_hash_cache.json"
+INTERNAL_FILENAMES: Set[str] = {HISTORY_FILENAME, HASH_CACHE_FILENAME}
+
 # Size units for --min-size (e.g. 1K, 10M, 1.5G)
 _SIZE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([KkMmGgTtBb]?)\s*$")
 _SIZE_MULTIPLIERS = {
@@ -50,8 +54,8 @@ def format_size(num_bytes: int) -> str:
     return f"{num_bytes}B"
 
 
-def matches_exclude(path: Path, root: Path, patterns: Sequence[str]) -> bool:
-    """Return True if path matches any exclude glob relative to root or by name."""
+def _matches_glob(path: Path, root: Path, patterns: Sequence[str]) -> bool:
+    """Return True if *path* matches any of *patterns* (name, relative, or segment)."""
     if not patterns:
         return False
     name = path.name
@@ -73,6 +77,22 @@ def matches_exclude(path: Path, root: Path, patterns: Sequence[str]) -> bool:
         if any(fnmatch.fnmatch(part, pattern) for part in path.parts):
             return True
     return False
+
+
+def matches_exclude(path: Path, root: Path, patterns: Sequence[str]) -> bool:
+    """Return True if path matches any exclude glob relative to root or by name."""
+    return _matches_glob(path, root, patterns)
+
+
+def matches_include(path: Path, root: Path, patterns: Sequence[str]) -> bool:
+    """Return True if path should be included.
+
+    When *patterns* is empty, every path is included. Otherwise the path must
+    match at least one include glob (inverse of exclude).
+    """
+    if not patterns:
+        return True
+    return _matches_glob(path, root, patterns)
 
 
 def _is_under_category(
@@ -111,6 +131,7 @@ def iter_files(
     *,
     recursive: bool = False,
     exclude: Sequence[str] | None = None,
+    include: Sequence[str] | None = None,
     min_size: int = 0,
     category_names: Iterable[str] | None = None,
     skip_category_folders: bool = True,
@@ -119,14 +140,17 @@ def iter_files(
     """Collect files to organize under *folder*.
 
     - Skips hidden files/dirs (names starting with ``.``)
-    - Skips the history file
+    - Skips internal metadata files (history, hash cache)
     - Never follows symlinks
+    - When *include* is non-empty, only paths matching at least one include
+      glob are kept (applied after exclude)
     - When recursive and *skip_category_folders*, does not re-scan files already
       living under known category directories (to avoid re-organizing).
     - *max_depth*: when recursive, limit how deep to walk (0 = only top level,
       same as non-recursive; ``None`` = unlimited).
     """
     exclude = list(exclude or [])
+    include = list(include or [])
     categories: Set[str] = set(category_names or [])
     results: List[Path] = []
 
@@ -139,9 +163,11 @@ def iter_files(
             return
         if path.name.startswith("."):
             return
-        if path.name == HISTORY_FILENAME:
+        if path.name in INTERNAL_FILENAMES:
             return
         if matches_exclude(path, folder, exclude):
+            return
+        if not matches_include(path, folder, include):
             return
         if min_size > 0:
             try:
@@ -215,6 +241,7 @@ def scan_folder(
     *,
     recursive: bool = False,
     exclude: Sequence[str] | None = None,
+    include: Sequence[str] | None = None,
     min_size: int = 0,
     use_mime: bool = False,
     max_depth: int | None = None,
@@ -225,6 +252,7 @@ def scan_folder(
         folder,
         recursive=recursive,
         exclude=exclude,
+        include=include,
         min_size=min_size,
         category_names=category_names,
         skip_category_folders=True,

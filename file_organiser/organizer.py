@@ -1,11 +1,13 @@
 """Core logic for scanning, organizing, previewing, undoing, stats, and prune."""
 from __future__ import annotations
 
+import json
 import os
 import shutil
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 from rich.console import Console
 from rich.progress import (
@@ -17,11 +19,12 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 from rich.table import Table
+from rich.tree import Tree as RichTree
 
 from .history import HISTORY_FILENAME, HistoryManager
 from .report import write_report
 from .rules import category_for_path
-from .scanner import format_size, iter_files, scan_folder
+from .scanner import format_size, iter_files, matches_include, scan_folder
 
 ConflictStrategy = Literal["rename", "skip", "overwrite"]
 DateSource = Literal["mtime", "ctime"]
@@ -90,6 +93,7 @@ def plan_moves(
     *,
     recursive: bool = False,
     exclude: Sequence[str] | None = None,
+    include: Sequence[str] | None = None,
     min_size: int = 0,
     by_date: bool = False,
     date_source: DateSource = "mtime",
@@ -106,6 +110,7 @@ def plan_moves(
         rules,
         recursive=recursive,
         exclude=exclude,
+        include=include,
         min_size=min_size,
         use_mime=use_mime,
         max_depth=max_depth,
@@ -154,6 +159,62 @@ def plan_moves(
     return pairs, skips
 
 
+def build_preview_plan(
+    folder: Path,
+    rules: Dict[str, List[str]],
+    *,
+    recursive: bool = False,
+    exclude: Sequence[str] | None = None,
+    include: Sequence[str] | None = None,
+    min_size: int = 0,
+    by_date: bool = False,
+    date_source: DateSource = "mtime",
+    use_mime: bool = False,
+    max_depth: int | None = None,
+    on_conflict: ConflictStrategy = "rename",
+) -> Dict[str, Any]:
+    """Build a machine-readable organize plan.
+
+    Schema::
+
+        {
+          "folder": "...",
+          "count": N,
+          "files": [
+            {"source": "...", "destination": "...", "category": "..."}
+          ]
+        }
+    """
+    pairs, _skips = plan_moves(
+        folder,
+        rules,
+        recursive=recursive,
+        exclude=exclude,
+        include=include,
+        min_size=min_size,
+        by_date=by_date,
+        date_source=date_source,
+        on_conflict=on_conflict,
+        use_mime=use_mime,
+        max_depth=max_depth,
+    )
+    files_out: List[Dict[str, str]] = []
+    for src, dest in pairs:
+        cat = category_for_path(src, rules, use_mime=use_mime)
+        files_out.append(
+            {
+                "source": str(src),
+                "destination": str(dest),
+                "category": cat,
+            }
+        )
+    return {
+        "folder": str(folder),
+        "count": len(files_out),
+        "files": files_out,
+    }
+
+
 def preview(
     folder: Path,
     rules: Dict[str, List[str]],
@@ -161,16 +222,38 @@ def preview(
     *,
     recursive: bool = False,
     exclude: Sequence[str] | None = None,
+    include: Sequence[str] | None = None,
     min_size: int = 0,
     by_date: bool = False,
     date_source: DateSource = "mtime",
     use_mime: bool = False,
     max_depth: int | None = None,
     quiet: bool = False,
+    as_json: bool = False,
 ) -> None:
-    """Show what would be organized, without moving anything."""
+    """Show what would be organized, without moving anything.
+
+    When *as_json* is True, print a machine-readable plan to stdout.
+    """
     if not folder.exists() or not folder.is_dir():
         console.print(f"[red]Error:[/red] '{folder}' is not a valid directory.")
+        return
+
+    if as_json:
+        plan = build_preview_plan(
+            folder,
+            rules,
+            recursive=recursive,
+            exclude=exclude,
+            include=include,
+            min_size=min_size,
+            by_date=by_date,
+            date_source=date_source,
+            use_mime=use_mime,
+            max_depth=max_depth,
+        )
+        # Print raw JSON to stdout (no rich styling) for machine consumers
+        print(json.dumps(plan, indent=2))
         return
 
     grouped = scan_folder(
@@ -178,6 +261,7 @@ def preview(
         rules,
         recursive=recursive,
         exclude=exclude,
+        include=include,
         min_size=min_size,
         use_mime=use_mime,
         max_depth=max_depth,
@@ -225,6 +309,7 @@ def show_stats(
     *,
     recursive: bool = True,
     exclude: Sequence[str] | None = None,
+    include: Sequence[str] | None = None,
     min_size: int = 0,
     use_mime: bool = False,
     max_depth: int | None = None,
@@ -242,6 +327,7 @@ def show_stats(
         folder,
         recursive=recursive,
         exclude=exclude,
+        include=include,
         min_size=min_size,
         category_names=category_names,
         skip_category_folders=False,
@@ -385,10 +471,12 @@ def organize(
     dry_run: bool = False,
     recursive: bool = False,
     copy: bool = False,
+    symlink: bool = False,
     by_date: bool = False,
     date_source: DateSource = "mtime",
     min_size: int = 0,
     exclude: Sequence[str] | None = None,
+    include: Sequence[str] | None = None,
     on_conflict: ConflictStrategy = "rename",
     report_path: Optional[Path] = None,
     use_mime: bool = False,
@@ -397,7 +485,10 @@ def organize(
     quiet: bool = False,
     verbose: bool = False,
 ) -> int:
-    """Move or copy files into category subfolders.
+    """Move, copy, or symlink files into category subfolders.
+
+    *symlink* creates a symlink at the destination pointing at the source
+    (sources stay in place). Mutually preferred over copy when both set.
 
     Returns the number of files successfully processed.
     """
@@ -405,11 +496,17 @@ def organize(
         console.print(f"[red]Error:[/red] '{folder}' is not a valid directory.")
         return 0
 
+    if symlink and copy:
+        # Symlink takes precedence; warn via quiet path only if verbose
+        if verbose:
+            console.print("[yellow]Both --symlink and --copy set; using symlink.[/yellow]")
+
     pairs, skips = plan_moves(
         folder,
         rules,
         recursive=recursive,
         exclude=exclude,
+        include=include,
         min_size=min_size,
         by_date=by_date,
         date_source=date_source,
@@ -423,7 +520,12 @@ def organize(
         return 0
 
     total = len(pairs)
-    mode = "copy" if copy else "move"
+    if symlink:
+        mode = "symlink"
+    elif copy:
+        mode = "copy"
+    else:
+        mode = "move"
     mode_tag = "[yellow](dry-run)[/yellow] " if dry_run else ""
     if not quiet:
         console.print(
@@ -459,7 +561,12 @@ def organize(
                     except ValueError:
                         pass
                     if verbose or not quiet:
-                        action = "would copy" if copy else "would move"
+                        if symlink:
+                            action = "would symlink"
+                        elif copy:
+                            action = "would copy"
+                        else:
+                            action = "would move"
                         progress.console.log(f"[dim]{action}[/dim] {src.name} -> {rel_dest}")
                     report_moves.append((dest, src))
                     success += 1
@@ -470,7 +577,11 @@ def organize(
                             dest.unlink()
                         except OSError:
                             pass
-                    if copy:
+                    if symlink:
+                        # Absolute target so the link works from category folders
+                        target = src.resolve()
+                        os.symlink(target, dest)
+                    elif copy:
                         shutil.copy2(str(src), str(dest))
                     else:
                         shutil.move(str(src), str(dest))
@@ -478,7 +589,12 @@ def organize(
                     report_moves.append((dest, src))
                     success += 1
                     if verbose:
-                        action = "copied" if copy else "moved"
+                        if symlink:
+                            action = "symlinked"
+                        elif copy:
+                            action = "copied"
+                        else:
+                            action = "moved"
                         progress.console.log(f"[green]{action}[/green] {src.name} -> {dest}")
             except (OSError, shutil.Error) as e:
                 errors.append(f"Failed to {mode} {src.name}: {e}")
@@ -495,8 +611,8 @@ def organize(
     elif dry_run and not quiet:
         console.print("[yellow]Dry run complete.[/yellow] No files were modified.")
 
-    # Prune empty dirs after move-mode organize (not copy, not dry-run)
-    if prune_empty and not dry_run and not copy and history_moves:
+    # Prune empty dirs after move-mode organize (not copy/symlink, not dry-run)
+    if prune_empty and not dry_run and mode == "move" and history_moves:
         n = prune_empty_dirs(folder, console if not quiet else None, quiet=quiet)
         if quiet and n and console:
             pass  # stay quiet
@@ -523,7 +639,7 @@ def undo(
 ) -> int:
     """Revert the most recent organize operation in this folder.
 
-    For copy mode, removes the copies (does not delete originals).
+    For copy/symlink mode, removes the copies/links (does not delete originals).
     For move mode, moves files back to original locations.
 
     With *list_only*, prints the history stack and returns 0 without undoing.
@@ -580,11 +696,12 @@ def undo(
         task = progress.add_task("Restoring files...", total=max(len(moves), 1))
         for current, original in moves:
             try:
-                if not current.exists():
+                # Symlinks: is_file/exists may follow; check is_symlink too
+                if not current.exists() and not current.is_symlink():
                     errors.append(f"Missing (already moved?): {current}")
                     continue
-                if mode == "copy":
-                    # Undo copy: remove the organized copy; original still exists
+                if mode in ("copy", "symlink"):
+                    # Undo copy/symlink: remove the organized entry; original stays
                     current.unlink()
                     restored += 1
                 else:
@@ -602,7 +719,7 @@ def undo(
 
     remaining = history.load_stack()
     if not quiet:
-        action = "Removed" if mode == "copy" else "Restored"
+        action = "Removed" if mode in ("copy", "symlink") else "Restored"
         extra = (
             f" ({len(remaining)} snapshot(s) remaining)"
             if remaining
@@ -614,6 +731,278 @@ def undo(
         for err in errors:
             console.print(f"  [red]•[/red] {err}")
     return restored
+
+
+def find_files(
+    folder: Path,
+    rules: Dict[str, List[str]],
+    console: Console,
+    *,
+    category: Optional[str] = None,
+    ext: Optional[str] = None,
+    name: Optional[str] = None,
+    recursive: bool = False,
+    exclude: Sequence[str] | None = None,
+    include: Sequence[str] | None = None,
+    min_size: int = 0,
+    max_depth: int | None = None,
+    use_mime: bool = False,
+    quiet: bool = False,
+) -> int:
+    """Find files matching category / extension / name filters.
+
+    Returns the number of matches.
+    """
+    if not folder.exists() or not folder.is_dir():
+        console.print(f"[red]Error:[/red] '{folder}' is not a valid directory.")
+        return 0
+
+    category_names = set(rules.keys()) | {"Other"}
+    files = iter_files(
+        folder,
+        recursive=recursive,
+        exclude=exclude,
+        include=include,
+        min_size=min_size,
+        category_names=category_names,
+        skip_category_folders=False,
+        max_depth=max_depth,
+    )
+
+    # Normalize extension filter
+    ext_norm: Optional[str] = None
+    if ext:
+        ext_norm = ext if ext.startswith(".") else f".{ext}"
+        ext_norm = ext_norm.lower()
+
+    name_patterns = [name] if name else []
+
+    matches: List[Tuple[Path, str, int]] = []
+    for path in files:
+        cat = category_for_path(path, rules, use_mime=use_mime)
+        if category and cat.lower() != category.lower():
+            continue
+        if ext_norm and path.suffix.lower() != ext_norm:
+            continue
+        if name_patterns and not matches_include(path, folder, name_patterns):
+            continue
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        matches.append((path, cat, size))
+
+    if not matches:
+        console.print(f"[yellow]No matching files in[/yellow] {folder}")
+        return 0
+
+    table = Table(title=f"Find: {folder}", header_style="bold cyan")
+    table.add_column("Path", style="white")
+    table.add_column("Category", style="green")
+    table.add_column("Size", justify="right", style="magenta")
+    table.add_column("Bytes", justify="right", style="dim")
+
+    total_bytes = 0
+    for path, cat, size in sorted(matches, key=lambda x: str(x[0])):
+        total_bytes += size
+        try:
+            rel = str(path.relative_to(folder))
+        except ValueError:
+            rel = str(path)
+        table.add_row(rel, cat, format_size(size), f"{size:,}")
+
+    console.print(table)
+    if not quiet:
+        console.print(
+            f"[bold]{len(matches)}[/bold] file(s), "
+            f"[bold]{format_size(total_bytes)}[/bold] total"
+        )
+    return len(matches)
+
+
+def show_tree(
+    folder: Path,
+    rules: Dict[str, List[str]],
+    console: Console,
+    *,
+    recursive: bool = True,
+    exclude: Sequence[str] | None = None,
+    include: Sequence[str] | None = None,
+    min_size: int = 0,
+    max_depth: int | None = None,
+    use_mime: bool = False,
+    quiet: bool = False,
+) -> None:
+    """Show a category-folder tree of the current layout with counts and sizes."""
+    if not folder.exists() or not folder.is_dir():
+        console.print(f"[red]Error:[/red] '{folder}' is not a valid directory.")
+        return
+
+    category_names = set(rules.keys()) | {"Other"}
+    files = iter_files(
+        folder,
+        recursive=recursive,
+        exclude=exclude,
+        include=include,
+        min_size=min_size,
+        category_names=category_names,
+        skip_category_folders=False,
+        max_depth=max_depth,
+    )
+
+    # Group by category; also note loose (root-level) files
+    by_cat: Dict[str, List[Tuple[Path, int]]] = defaultdict(list)
+    total_bytes = 0
+    for path in files:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        cat = category_for_path(path, rules, use_mime=use_mime)
+        by_cat[cat].append((path, size))
+        total_bytes += size
+
+    tree = RichTree(
+        f"[bold cyan]{folder.name}[/bold cyan] "
+        f"[dim]({sum(len(v) for v in by_cat.values())} files, "
+        f"{format_size(total_bytes)})[/dim]"
+    )
+
+    if not by_cat:
+        tree.add("[dim](empty)[/dim]")
+        console.print(tree)
+        return
+
+    for cat in sorted(by_cat.keys()):
+        items = by_cat[cat]
+        cat_bytes = sum(s for _, s in items)
+        label = (
+            f"[green]{cat}/[/green] "
+            f"[magenta]{len(items)}[/magenta] "
+            f"[dim]{format_size(cat_bytes)}[/dim]"
+        )
+        node = tree.add(label)
+
+        # Show date subdirs if present under category folder
+        subdirs: Dict[str, List[Tuple[Path, int]]] = defaultdict(list)
+        direct: List[Tuple[Path, int]] = []
+        for path, size in items:
+            try:
+                rel = path.relative_to(folder)
+            except ValueError:
+                node.add(f"[dim]{path.name}[/dim] {format_size(size)}")
+                continue
+            if len(rel.parts) >= 3 and rel.parts[0] == cat:
+                # Category/YYYY/MM/... or Category/sub/...
+                sub = "/".join(rel.parts[1:-1])
+                if sub:
+                    subdirs[sub].append((path, size))
+                else:
+                    direct.append((path, size))
+            elif len(rel.parts) == 2 and rel.parts[0] == cat:
+                direct.append((path, size))
+            else:
+                # Loose file not under category dir
+                node.add(f"[dim]{rel.as_posix()}[/dim] {format_size(size)}")
+
+        for sub in sorted(subdirs.keys()):
+            sub_items = subdirs[sub]
+            sub_bytes = sum(s for _, s in sub_items)
+            node.add(
+                f"[cyan]{sub}/[/cyan] "
+                f"[magenta]{len(sub_items)}[/magenta] "
+                f"[dim]{format_size(sub_bytes)}[/dim]"
+            )
+
+        # Compact sample names for files directly under the category
+        if direct and not subdirs:
+            samples = ", ".join(p.name for p, _ in direct[:5])
+            if len(direct) > 5:
+                samples += f", … (+{len(direct) - 5})"
+            if samples:
+                node.add(f"[dim]{samples}[/dim]")
+
+    console.print(tree)
+    if not quiet:
+        console.print(
+            f"[bold]{sum(len(v) for v in by_cat.values())}[/bold] file(s) in "
+            f"[bold]{len(by_cat)}[/bold] categor(ies), "
+            f"[bold]{format_size(total_bytes)}[/bold]"
+        )
+
+
+def show_extensions(
+    folder: Path,
+    console: Console,
+    *,
+    recursive: bool = True,
+    exclude: Sequence[str] | None = None,
+    include: Sequence[str] | None = None,
+    min_size: int = 0,
+    max_depth: int | None = None,
+    quiet: bool = False,
+) -> int:
+    """Table of every extension with count and total bytes, sorted by size.
+
+    Returns the number of distinct extensions found.
+    """
+    if not folder.exists() or not folder.is_dir():
+        console.print(f"[red]Error:[/red] '{folder}' is not a valid directory.")
+        return 0
+
+    files = iter_files(
+        folder,
+        recursive=recursive,
+        exclude=exclude,
+        include=include,
+        min_size=min_size,
+        category_names=None,
+        skip_category_folders=False,
+        max_depth=max_depth,
+    )
+
+    by_ext_count: Dict[str, int] = defaultdict(int)
+    by_ext_bytes: Dict[str, int] = defaultdict(int)
+    total_bytes = 0
+    total_files = 0
+
+    for path in files:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        ext = path.suffix.lower() or "(none)"
+        by_ext_count[ext] += 1
+        by_ext_bytes[ext] += size
+        total_bytes += size
+        total_files += 1
+
+    if not by_ext_count:
+        console.print(f"[yellow]No files found in[/yellow] {folder}")
+        return 0
+
+    table = Table(title=f"Extensions: {folder}", header_style="bold cyan")
+    table.add_column("Extension", style="green")
+    table.add_column("Count", justify="right", style="magenta")
+    table.add_column("Size", justify="right", style="white")
+    table.add_column("Bytes", justify="right", style="dim")
+
+    for ext in sorted(by_ext_count.keys(), key=lambda e: (-by_ext_bytes[e], e)):
+        table.add_row(
+            ext,
+            str(by_ext_count[ext]),
+            format_size(by_ext_bytes[ext]),
+            f"{by_ext_bytes[ext]:,}",
+        )
+
+    console.print(table)
+    if not quiet:
+        console.print(
+            f"[bold]{total_files}[/bold] file(s), "
+            f"[bold]{len(by_ext_count)}[/bold] extension(s), "
+            f"[bold]{format_size(total_bytes)}[/bold]"
+        )
+    return len(by_ext_count)
 
 
 def _cleanup_empty_dirs(folder: Path) -> None:

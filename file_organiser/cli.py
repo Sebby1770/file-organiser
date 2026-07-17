@@ -11,8 +11,17 @@ from rich.table import Table
 
 from . import __version__
 from .duplicates import default_workers, find_and_report_duplicates
-from .organizer import organize, preview, prune_empty_dirs, show_stats, undo
-from .rules import DEFAULT_RULES, OTHER_CATEGORY, discover_config, load_rules
+from .organizer import (
+    find_files,
+    organize,
+    preview,
+    prune_empty_dirs,
+    show_extensions,
+    show_stats,
+    show_tree,
+    undo,
+)
+from .rules import OTHER_CATEGORY, discover_config, load_rules
 from .scanner import parse_size
 
 
@@ -84,6 +93,13 @@ def _add_scan_opts(sp: argparse.ArgumentParser) -> None:
         help="Exclude files/dirs matching GLOB (repeatable).",
     )
     sp.add_argument(
+        "--include",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="Only process files matching GLOB (repeatable; inverse of --exclude).",
+    )
+    sp.add_argument(
         "--mime",
         action="store_true",
         help=(
@@ -99,6 +115,14 @@ def _add_organize_opts(sp: argparse.ArgumentParser) -> None:
         "--copy",
         action="store_true",
         help="Copy files instead of moving them.",
+    )
+    sp.add_argument(
+        "--symlink",
+        action="store_true",
+        help=(
+            "Create symlinks in category folders instead of moving/copying "
+            "(sources stay in place; symlinks are not followed when scanning)."
+        ),
     )
     sp.add_argument(
         "--by-date",
@@ -154,8 +178,8 @@ def build_parser() -> argparse.ArgumentParser:
         "organize",
         help="Sort files into category subfolders.",
         description=(
-            "Move (or copy) files in the target folder into category subfolders "
-            "(Images, Documents, …)."
+            "Move (or copy/symlink) files in the target folder into category "
+            "subfolders (Images, Documents, …)."
         ),
     )
     _add_folder_arg(sp_organize)
@@ -187,7 +211,123 @@ def build_parser() -> argparse.ArgumentParser:
         default="mtime",
         help="Timestamp to use with --by-date (default: mtime).",
     )
+    sp_preview.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Print a machine-readable organize plan as JSON to stdout.",
+    )
     _add_verbosity(sp_preview)
+
+    # --- find ---
+    sp_find = subparsers.add_parser(
+        "find",
+        help="Find files by category, extension, or name pattern.",
+        description=(
+            "Search a folder and print matching paths with sizes. "
+            "Filter with --category, --ext, and/or --name."
+        ),
+    )
+    _add_folder_arg(sp_find)
+    _add_config_arg(sp_find)
+    _add_scan_opts(sp_find)
+    sp_find.add_argument(
+        "--category",
+        type=str,
+        default=None,
+        metavar="NAME",
+        help="Only files that categorize as NAME (e.g. Images).",
+    )
+    sp_find.add_argument(
+        "--ext",
+        type=str,
+        default=None,
+        metavar="EXT",
+        help="Only files with this extension (e.g. .pdf or pdf).",
+    )
+    sp_find.add_argument(
+        "--name",
+        type=str,
+        default=None,
+        metavar="GLOB",
+        help='Only files matching name glob (e.g. "*.invoice*").',
+    )
+    _add_verbosity(sp_find)
+
+    # --- tree ---
+    sp_tree = subparsers.add_parser(
+        "tree",
+        help="Show category folder tree with counts and sizes.",
+        description=(
+            "Display the current layout as a category tree "
+            "(useful after organize, or to inspect an existing folder)."
+        ),
+    )
+    _add_folder_arg(sp_tree)
+    _add_config_arg(sp_tree)
+    _add_scan_opts(sp_tree)
+    sp_tree.set_defaults(recursive=True)
+    sp_tree.add_argument(
+        "--no-recursive",
+        action="store_false",
+        dest="recursive",
+        help="Only scan the top level of the folder.",
+    )
+    _add_verbosity(sp_tree)
+
+    # --- extensions ---
+    sp_ext = subparsers.add_parser(
+        "extensions",
+        help="Inventory every extension with count and total size.",
+        description=(
+            "Scan a folder and print a table of each file extension with "
+            "count and total bytes, sorted by size descending."
+        ),
+    )
+    _add_folder_arg(sp_ext)
+    # No config needed for pure extension inventory, but allow scan filters
+    sp_ext.add_argument(
+        "-r",
+        "--recursive",
+        action="store_true",
+        default=True,
+        help="Scan nested folders (default: on).",
+    )
+    sp_ext.add_argument(
+        "--no-recursive",
+        action="store_false",
+        dest="recursive",
+        help="Only scan the top level of the folder.",
+    )
+    sp_ext.add_argument(
+        "--max-depth",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Limit recursive scan depth (0 = top level only).",
+    )
+    sp_ext.add_argument(
+        "--min-size",
+        type=str,
+        default=None,
+        metavar="SIZE",
+        help="Skip files smaller than SIZE (e.g. 1K, 10M, 1G).",
+    )
+    sp_ext.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="Exclude files/dirs matching GLOB (repeatable).",
+    )
+    sp_ext.add_argument(
+        "--include",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="Only process files matching GLOB (repeatable).",
+    )
+    _add_verbosity(sp_ext)
 
     # --- stats ---
     sp_stats = subparsers.add_parser(
@@ -223,7 +363,7 @@ def build_parser() -> argparse.ArgumentParser:
         "undo",
         help="Revert the last organize operation in a folder.",
         description=(
-            "Use the history stack to move files back (or remove copies). "
+            "Use the history stack to move files back (or remove copies/symlinks). "
             "Supports multiple levels; use --list to inspect the stack."
         ),
     )
@@ -257,7 +397,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp_dup = subparsers.add_parser(
         "duplicates",
         help="Find duplicate files by content (SHA-256).",
-        description="Scan for files with identical content and optionally delete extras.",
+        description=(
+            "Scan for files with identical content and optionally delete extras. "
+            "Uses an on-disk hash cache for faster re-runs."
+        ),
     )
     _add_folder_arg(sp_dup)
     # Recursive by default for duplicates; --no-recursive to limit to top level
@@ -296,6 +439,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exclude files/dirs matching GLOB (repeatable).",
     )
     sp_dup.add_argument(
+        "--include",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="Only process files matching GLOB (repeatable).",
+    )
+    sp_dup.add_argument(
         "--workers",
         type=int,
         default=None,
@@ -306,6 +456,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--delete-dupes",
         action="store_true",
         help="Delete duplicate files, keeping one per group.",
+    )
+    sp_dup.add_argument(
+        "--trash",
+        action="store_true",
+        help=(
+            "With --delete-dupes, move duplicates to the OS trash "
+            "(requires: pip install file-organiser[trash]). "
+            "Falls back to permanent delete with a warning if unavailable."
+        ),
+    )
+    sp_dup.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Do not read/write the .organizer_hash_cache.json hash cache.",
     )
     sp_dup.add_argument(
         "--keep",
@@ -415,22 +579,40 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 console,
                 recursive=args.recursive,
                 exclude=getattr(args, "exclude", None) or None,
+                include=getattr(args, "include", None) or None,
                 min_size=min_size,
                 max_depth=getattr(args, "max_depth", None),
                 workers=getattr(args, "workers", None),
                 delete_dupes=args.delete_dupes,
                 keep=args.keep,
                 dry_run=args.dry_run,
+                use_trash=getattr(args, "trash", False),
+                use_cache=not getattr(args, "no_cache", False),
             )
             return 0
 
-        # Rules needed for organize / preview / watch / stats
+        if args.command == "extensions":
+            min_size = _resolve_min_size(getattr(args, "min_size", None), console)
+            show_extensions(
+                folder,
+                console,
+                recursive=args.recursive,
+                exclude=getattr(args, "exclude", None) or None,
+                include=getattr(args, "include", None) or None,
+                min_size=min_size,
+                max_depth=getattr(args, "max_depth", None),
+                quiet=quiet,
+            )
+            return 0
+
+        # Rules needed for organize / preview / watch / stats / find / tree
         config_arg = (
             args.config.expanduser().resolve() if getattr(args, "config", None) else None
         )
         rules = _resolve_rules(config_arg)
         min_size = _resolve_min_size(getattr(args, "min_size", None), console)
         exclude: List[str] = list(getattr(args, "exclude", None) or [])
+        include: List[str] = list(getattr(args, "include", None) or [])
         use_mime = bool(getattr(args, "mime", False))
         max_depth = getattr(args, "max_depth", None)
 
@@ -441,10 +623,44 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 console,
                 recursive=args.recursive,
                 exclude=exclude or None,
+                include=include or None,
                 min_size=min_size,
                 use_mime=use_mime,
                 max_depth=max_depth,
                 top_n=getattr(args, "top", 10),
+                quiet=quiet,
+            )
+            return 0
+
+        if args.command == "find":
+            find_files(
+                folder,
+                rules,
+                console,
+                category=getattr(args, "category", None),
+                ext=getattr(args, "ext", None),
+                name=getattr(args, "name", None),
+                recursive=args.recursive,
+                exclude=exclude or None,
+                include=include or None,
+                min_size=min_size,
+                max_depth=max_depth,
+                use_mime=use_mime,
+                quiet=quiet,
+            )
+            return 0
+
+        if args.command == "tree":
+            show_tree(
+                folder,
+                rules,
+                console,
+                recursive=args.recursive,
+                exclude=exclude or None,
+                include=include or None,
+                min_size=min_size,
+                max_depth=max_depth,
+                use_mime=use_mime,
                 quiet=quiet,
             )
             return 0
@@ -456,12 +672,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 console,
                 recursive=args.recursive,
                 exclude=exclude or None,
+                include=include or None,
                 min_size=min_size,
                 by_date=getattr(args, "by_date", False),
                 date_source=getattr(args, "date_source", "mtime"),
                 use_mime=use_mime,
                 max_depth=max_depth,
                 quiet=quiet,
+                as_json=getattr(args, "as_json", False),
             )
             return 0
 
@@ -473,10 +691,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 dry_run=args.dry_run,
                 recursive=args.recursive,
                 copy=args.copy,
+                symlink=getattr(args, "symlink", False),
                 by_date=args.by_date,
                 date_source=args.date_source,
                 min_size=min_size,
                 exclude=exclude or None,
+                include=include or None,
                 on_conflict=args.on_conflict,
                 report_path=args.report.expanduser().resolve() if args.report else None,
                 use_mime=use_mime,
