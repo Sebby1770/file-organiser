@@ -1,8 +1,15 @@
 {
-  "Images": [".jpg", ".jpeg", ".png", ".gif", ".webp"],
-  "Documents": [".pdf", ".docx", ".txt", ".md"],
-  "Videos": [".mp4", ".mov", ".mkv"],
-  "Music": [".mp3", ".flac", ".wav"],
-  "Code": [".py", ".js", ".ts", ".html", ".css"],
-  "Data": [".csv", ".json", ".xlsx"]
+  "categories": {
+    "Creative": [".afdesign", ".ai", ".psd"],
+    "Data": [".csv", ".jsonl", ".parquet"],
+    "Documents": [".docx", ".md", ".pdf", ".txt"],
+    "Images": [".gif", ".jpeg", ".jpg", ".png", ".webp"]
+  },
+  "default_category": "Other",
+  "ignore_patterns": [
+    "*.download",
+    "*.part",
+    "in-progress/**"
+  ],
+  "include_hidden": false
 }

@@ -1,0 +1,26 @@
+# Python caches and tooling
+__pycache__/
+*.py[cod]
+.coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+
+# Builds
+build/
+dist/
+*.egg-info/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local transaction data created when this repository is used as a fixture
+.file-organizer/
