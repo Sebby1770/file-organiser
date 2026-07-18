@@ -187,6 +187,7 @@ class TransactionTests(unittest.TestCase):
                 mock.patch.object(
                     executor, "fingerprint_file", replace_after_destination_hash
                 ),
+                mock.patch.object(executor.os, "supports_follow_symlinks", set()),
             ):
                 with self.assertRaises(TransactionError) as raised:
                     executor.apply_plan(plan)

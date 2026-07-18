@@ -146,19 +146,28 @@ def atomic_write_json(path: Path, payload: object, *, private: bool = False) -> 
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
     )
     temporary = Path(temporary_name)
+    descriptor_open = True
     try:
-        if private:
-            os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        fchmod = getattr(os, "fchmod", None)
+        if private and fchmod is not None:
+            fchmod(descriptor, 0o600)
+        stream = os.fdopen(descriptor, "w", encoding="utf-8")
+        descriptor_open = False
+        with stream:
             json.dump(payload, stream, indent=2, sort_keys=True)
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
     except BaseException:
+        if descriptor_open:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
         try:
             temporary.unlink()
-        except FileNotFoundError:
+        except OSError:
             pass
         raise
 

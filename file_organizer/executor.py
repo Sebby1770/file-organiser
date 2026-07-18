@@ -527,11 +527,12 @@ def _copy_across_devices(
         os.close(source_descriptor)
 
     try:
-        os.utime(
-            destination,
-            ns=(source_info.st_atime_ns, source_info.st_mtime_ns),
-            follow_symlinks=False,
-        )
+        if os.utime in os.supports_follow_symlinks:
+            os.utime(
+                destination,
+                ns=(source_info.st_atime_ns, source_info.st_mtime_ns),
+                follow_symlinks=False,
+            )
         copied = fingerprint_file(destination, root)
         if not fingerprints_match(expected, copied):
             raise ConflictError(f"File changed during cross-device move: {source}")
