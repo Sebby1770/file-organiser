@@ -188,9 +188,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="file-organiser",
         description=(
-            "Smart CLI to sort, dedupe, clean, rename, and watch folders by type "
-            "and date. Automatically sorts files into category folders "
-            "(Images, Documents, …)."
+            "Desktop disk map and CLI to sort, dedupe, clean, and undo folders. "
+            "Run `file-organiser app` to open the local sunburst UI."
         ),
         epilog="Example: file-organiser organize ~/Downloads --dry-run",
     )
@@ -819,6 +818,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional live folder for /api/preview.",
     )
 
+    sp_app = subparsers.add_parser(
+        "app",
+        help="Open the desktop disk map in your browser.",
+        description=(
+            "Launch File Organiser as a local app: sunburst disk map, largest "
+            "and stale files, duplicates, organize preview, reveal and trash. "
+            "Nothing leaves this machine."
+        ),
+    )
+    sp_app.add_argument("folder", nargs="?", type=Path, default=None, help="Optional folder to scan first.")
+    sp_app.add_argument("--host", default="127.0.0.1")
+    sp_app.add_argument("--port", type=int, default=8765)
+    sp_app.add_argument("--no-browser", action="store_true")
+
+    sp_map = subparsers.add_parser(
+        "map",
+        help="Print a text disk map (top folders by size).",
+    )
+    _add_folder_arg(sp_map)
+
     sp_why = subparsers.add_parser(
         "why",
         help="Explain how a single file would be categorized.",
@@ -879,6 +898,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
             folder = args.folder.expanduser().resolve() if args.folder else None
             serve(args.host, args.port, folder)
+            return 0
+
+        if args.command == "app":
+            from .app_server import serve_app
+
+            folder = args.folder.expanduser().resolve() if args.folder else None
+            serve_app(args.host, args.port, folder, open_browser=not args.no_browser)
+            return 0
+
+        if args.command == "map":
+            from .app_server import map_text
+
+            console.print(map_text(args.folder.expanduser().resolve()))
             return 0
 
         if args.command == "apply":

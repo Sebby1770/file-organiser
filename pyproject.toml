@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "file-organiser"
-version = "1.5.0"
-description = "Smart CLI to sort, dedupe, clean, rename, and watch folders — magic bytes, smart names, and a local studio site"
+version = "2.0.0"
+description = "Desktop disk map and file organiser — sunburst usage, duplicates, organize, undo. Download and run locally."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
@@ -44,6 +44,9 @@ Issues = "https://github.com/Sebby1770/file-organiser/issues"
 
 [tool.setuptools.packages.find]
 include = ["file_organiser*"]
+
+[tool.setuptools.package-data]
+file_organiser = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

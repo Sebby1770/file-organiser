@@ -11,6 +11,7 @@
     <header>
       <a class="word" href="./">file-organiser</a>
       <nav>
+        <a href="#get">Get the app</a>
         <a href="#about">About</a>
         <a href="#does">What it does</a>
         <a href="#help">How it helps</a>
@@ -30,8 +31,8 @@
           is the planner. The CLI is the desk.
         </p>
         <p>
-          <a class="btn" href="#demo">Open the planner</a>
-          <a class="btn ghost" href="https://github.com/Sebby1770/file-organiser">Source</a>
+          <a class="btn" href="#get">Get the app</a>
+          <a class="btn ghost" href="#demo">Planner</a>
         </p>
       </section>
       <ol class="pipe">
@@ -40,6 +41,22 @@
         <li><span>03</span><strong>Move</strong><p>Or copy. Or symlink. Date nests if you ask.</p></li>
         <li><span>04</span><strong>Undo</strong><p>A stack in the folder. Walk it back.</p></li>
       </ol>
+      <section id="get">
+        <h2>Download and use it on your computer</h2>
+        <p>
+          This is not a website that sees your files. Install it, then run the
+          desktop map: a sunburst of where bytes went, largest and stale files,
+          duplicates you can reclaim, organize preview, reveal in Finder, trash.
+          DaisyDisk shows a pretty ring. This one also <em>does something</em>
+          about the mess.
+        </p>
+        <pre><code>python3 -m pip install -e ".[trash]"
+file-organiser app
+# or
+file-organiser app ~/Downloads
+file-organiser map ~/Downloads</code></pre>
+        <p>macOS / Windows / Linux binaries: GitHub → Actions → <code>release-app</code> artifacts, or <code>python scripts/build_app.py</code>.</p>
+      </section>
       <section id="about">
         <h2>What this site is</h2>
         <p>

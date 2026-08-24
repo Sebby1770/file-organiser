@@ -4,15 +4,38 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/Sebby1770/file-organiser/actions/workflows/ci.yml/badge.svg)](https://github.com/Sebby1770/file-organiser/actions/workflows/ci.yml)
 
-**Smart CLI to sort, dedupe, clean, rename, and watch folders by type, MIME, magic bytes, and date.**
+**A disk map you can download and run — then organize, dedupe, and undo.**
 
 Site: [https://sebby1770.github.io/file-organiser/](https://sebby1770.github.io/file-organiser/)
 
+DaisyDisk shows a sunburst. File Organiser shows the sunburst **and** does the work: largest and stale files, content duplicates with reclaimable bytes, a dry-run organize plan, reveal in Finder/Explorer, trash, magic-byte typing, and an undo journal. Nothing is uploaded.
+
+## Get it on your computer
+
 ```bash
+python3 -m pip install -e ".[trash]"
+file-organiser app
+# or jump straight into a folder
+file-organiser app ~/Downloads
+```
+
+That opens a local desktop UI in your browser (`127.0.0.1`). Your files never leave the machine.
+
+Build a standalone binary (macOS / Windows / Linux):
+
+```bash
+python3 -m pip install pyinstaller
+python3 scripts/build_app.py
+# dist/FileOrganiser/
+```
+
+GitHub Actions workflow `release-app` produces the same artifacts per OS.
+
+```bash
+file-organiser map ~/Downloads          # text map in the terminal
 file-organiser preview ~/Downloads --magic --smart --older-than 7d
 file-organiser why ~/Downloads/mystery.bin
 file-organiser doctor ~/Downloads
-file-organiser web --folder ~/Downloads --port 8765
 ```
 
 Sort messy downloads into category folders (`Images/`, `Documents/`, `Videos/`, …), find content duplicates by SHA-256 (cached + parallel hashing with reclaimable-space report), bulk-rename, clean junk, compare folders, nest by year/month, prune empty dirs, multi-level undo, search by category/ext/name, and optionally watch a folder for new files — with dry-run, JSON plans, stats, and rich terminal output (respects `NO_COLOR`).
