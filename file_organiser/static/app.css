@@ -85,6 +85,21 @@ html, body { margin: 0; height: 100%; background: var(--ink); color: var(--paper
 .tabs button.on { color: var(--paper); border-color: var(--gold); }
 .tab { display: none; overflow: auto; max-height: 220px; }
 .tab.on { display: block; }
+.progress { height: 3px; background: var(--line); }
+.progress i { display: block; height: 3px; width: 0; background: var(--gold); }
+.tools { position: absolute; top: 12px; left: 12px; display: flex; gap: 6px; z-index: 2; }
+.tip {
+  position: fixed;
+  background: #1c2230;
+  border: 1px solid var(--line);
+  padding: 6px 8px;
+  font-size: 12px;
+  pointer-events: none;
+  z-index: 5;
+}
+.vol, .waste { font-size: 13px; color: var(--muted); margin: 10px 0; }
+.waste strong { color: var(--gold); }
+.dupe { border-bottom: 1px solid var(--line); padding: 8px 0; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; font-family: ui-monospace, Menlo, monospace; }
 td, th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 tr { cursor: pointer; }

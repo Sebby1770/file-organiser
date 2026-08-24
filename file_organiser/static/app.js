@@ -1,6 +1,7 @@
 const pathInput = document.querySelector("#path");
 const statusEl = document.querySelector("#status");
 const canvas = document.querySelector("#sun");
+const tip = document.querySelector("#tip");
 const inspect = {
   name: document.querySelector("#i-name"),
   size: document.querySelector("#i-size"),
@@ -10,8 +11,12 @@ const inspect = {
 };
 let scan = null;
 let slices = [];
+let treeHits = [];
 let selected = null;
 let pollTimer = null;
+let view = "sun";
+let viewRoot = null;
+const zoomStack = [];
 
 function fmt(n) {
   if (n >= 1e12) return (n / 1e12).toFixed(2) + " TB";
@@ -44,11 +49,24 @@ function showInspect(node) {
   inspect.why.hidden = true;
 }
 
+function currentTree() {
+  return viewRoot || (scan && scan.tree);
+}
+
 function paint() {
-  if (!scan || !scan.tree) return;
-  scan.tree.label = scan.label;
-  slices = drawSunburst(canvas, scan.tree, selected && selected.path);
-  document.querySelector("#crumb").textContent = scan.root + " · " + scan.visited + " files";
+  const tree = currentTree();
+  if (!tree) return;
+  if (!tree.label && tree.size) tree.label = fmt(tree.size);
+  if (view === "tree") {
+    treeHits = drawTreemap(canvas, tree, selected && selected.path);
+    slices = [];
+  } else {
+    slices = drawSunburst(canvas, tree, selected && selected.path);
+    treeHits = [];
+  }
+  const bits = [scan.root, scan.visited + " files"];
+  if (viewRoot && viewRoot.path !== scan.root) bits.push("zoomed " + viewRoot.name);
+  document.querySelector("#crumb").textContent = bits.join(" · ");
 }
 
 function table(rows, cols) {
@@ -83,17 +101,49 @@ function fillTabs() {
   ]);
   document.querySelectorAll("#tab-largest tr[data-path], #tab-stale tr[data-path]").forEach((tr) => {
     tr.addEventListener("click", () => {
-      showInspect({ name: tr.children[0].textContent, path: tr.dataset.path, size: 0, label: tr.children[1].textContent, files: 1, dir: false });
+      showInspect({
+        name: tr.children[0].textContent,
+        path: tr.dataset.path,
+        size: 0,
+        label: tr.children[1].textContent,
+        files: 1,
+        dir: false,
+      });
     });
   });
+  const w = scan.waste || {};
+  const v = scan.volume || {};
+  const volEl = document.querySelector("#vol");
+  const wasteEl = document.querySelector("#waste");
+  if (v.free_label) {
+    volEl.hidden = false;
+    volEl.textContent = `Disk ${v.pct}% used · ${v.free_label} free of ${v.total_label}`;
+  }
+  if (w.total) {
+    wasteEl.hidden = false;
+    wasteEl.innerHTML = `<strong>Reclaim ~ ${w.total_label}</strong><br>caches ${w.caches_label} · stale ${w.stale_label} · ${w.empty} empty folders`;
+  }
+  document.querySelector("#tab-reclaim").innerHTML = `
+    <p class="meta">Caches (node_modules, __pycache__, …) plus large files untouched for a year. DaisyDisk shows the ring. This estimates what you can actually throw away.</p>
+    <p><strong>${w.total_label || "0B"}</strong> likely reclaimable</p>
+    <ul class="meta">
+      <li>Build/cache folders: ${w.caches_label || "0"} (${w.cache_files || 0} files)</li>
+      <li>Stale large files: ${w.stale_label || "0"}</li>
+      <li>Empty folders: ${w.empty || 0}</li>
+    </ul>`;
 }
 
 async function poll() {
   const st = await fetch("/api/status").then((r) => r.json());
+  const bar = document.querySelector("#progress");
+  const inner = document.querySelector("#pbar");
   if (st.status === "running") {
     statusEl.textContent = `Scanning… ${st.visited} files · ${st.label}`;
+    bar.hidden = false;
+    inner.style.width = Math.min(90, 12 + (st.visited % 400) / 8) + "%";
     return;
   }
+  bar.hidden = true;
   clearInterval(pollTimer);
   pollTimer = null;
   const data = await fetch("/api/scan").then((r) => r.json());
@@ -102,6 +152,8 @@ async function poll() {
     return;
   }
   scan = data.result;
+  viewRoot = scan.tree;
+  zoomStack.length = 0;
   statusEl.textContent = `Mapped ${scan.files} files · ${scan.label} in ${scan.elapsed_ms} ms`;
   showInspect(scan.tree);
   paint();
@@ -110,6 +162,8 @@ async function poll() {
 
 async function startScan(path) {
   statusEl.textContent = "Starting scan…";
+  document.querySelector("#progress").hidden = false;
+  document.querySelector("#pbar").style.width = "8%";
   const res = await fetch("/api/scan", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -121,8 +175,40 @@ async function startScan(path) {
     return;
   }
   if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(poll, 400);
+  pollTimer = setInterval(poll, 350);
   poll();
+}
+
+async function zoomInto(node) {
+  if (!node || !node.dir || !node.path) return;
+  if (node.children && node.children.length) {
+    zoomStack.push(viewRoot);
+    viewRoot = node;
+    showInspect(node);
+    paint();
+    return;
+  }
+  const data = await fetch("/api/zoom", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: node.path }),
+  }).then((r) => r.json());
+  if (!data.ok) {
+    statusEl.textContent = data.error;
+    return;
+  }
+  zoomStack.push(viewRoot);
+  viewRoot = data.tree;
+  showInspect(viewRoot);
+  paint();
+}
+
+function zoomOut() {
+  if (zoomStack.length) {
+    viewRoot = zoomStack.pop();
+    showInspect(viewRoot);
+    paint();
+  }
 }
 
 document.querySelector("#path-form").addEventListener("submit", (event) => {
@@ -130,19 +216,63 @@ document.querySelector("#path-form").addEventListener("submit", (event) => {
   startScan(pathInput.value.trim());
 });
 
+document.querySelector("#browse").addEventListener("click", async () => {
+  const data = await fetch("/api/pick", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then((r) => r.json());
+  if (data.ok && data.path) {
+    pathInput.value = data.path;
+    startScan(data.path);
+  }
+});
+
+document.querySelector("#cancel").addEventListener("click", () => {
+  fetch("/api/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+});
+
+document.querySelector("#zoom-out").addEventListener("click", zoomOut);
+document.querySelector("#view-sun").addEventListener("click", () => {
+  view = "sun";
+  paint();
+});
+document.querySelector("#view-tree").addEventListener("click", () => {
+  view = "tree";
+  paint();
+});
+
 canvas.addEventListener("click", (event) => {
-  const node = hitSunburst(slices, canvas, event.clientX, event.clientY);
+  const node = view === "tree" ? hitTreemap(treeHits, canvas, event.clientX, event.clientY) : hitSunburst(slices, canvas, event.clientX, event.clientY);
   if (node) {
     showInspect(node);
     paint();
   }
+});
+canvas.addEventListener("dblclick", (event) => {
+  const node = view === "tree" ? hitTreemap(treeHits, canvas, event.clientX, event.clientY) : hitSunburst(slices, canvas, event.clientX, event.clientY);
+  if (node) zoomInto(node);
+});
+canvas.addEventListener("mousemove", (event) => {
+  const node = view === "tree" ? hitTreemap(treeHits, canvas, event.clientX, event.clientY) : hitSunburst(slices, canvas, event.clientX, event.clientY);
+  if (!node) {
+    tip.hidden = true;
+    return;
+  }
+  tip.hidden = false;
+  tip.style.left = event.clientX + 12 + "px";
+  tip.style.top = event.clientY + 12 + "px";
+  tip.textContent = `${node.name} · ${node.label || fmt(node.size || 0)}`;
+});
+canvas.addEventListener("mouseleave", () => {
+  tip.hidden = true;
 });
 
 document.querySelector("#reveal").addEventListener("click", () => {
   if (!selected || !selected.path) return;
   fetch("/api/reveal", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: selected.path }) });
 });
-
+document.querySelector("#copy").addEventListener("click", async () => {
+  if (!selected || !selected.path) return;
+  await navigator.clipboard.writeText(selected.path);
+  statusEl.textContent = "Path copied.";
+});
 document.querySelector("#trash").addEventListener("click", async () => {
   if (!selected || !selected.path) return;
   if (!confirm(`Move to trash?\n${selected.path}`)) return;
@@ -154,7 +284,6 @@ document.querySelector("#trash").addEventListener("click", async () => {
   statusEl.textContent = data.ok ? `${data.action} ${selected.name}` : data.error;
   if (data.ok) startScan(pathInput.value.trim());
 });
-
 document.querySelector("#why").addEventListener("click", async () => {
   if (!selected || !selected.path) return;
   const data = await fetch("/api/why?path=" + encodeURIComponent(selected.path)).then((r) => r.json());
@@ -183,11 +312,28 @@ document.querySelector('[data-tab="dupes"]').addEventListener("click", async () 
   }
   const groups = data.groups || [];
   const html =
-    `<p class="meta">Reclaimable ${data.reclaim_label} across ${data.extra_files} extra copies.</p>` +
+    `<p class="meta">Reclaimable ${data.reclaim_label} across ${data.extra_files} extra copies. Trash extras keeps the largest.</p>` +
     groups
-      .map((g) => `<p><strong>${g.count}×</strong> keep ${g.keep}<br>${g.files.map((f) => f.name).join(" · ")}</p>`)
+      .map(
+        (g) =>
+          `<div class="dupe"><p><strong>${g.count}×</strong> keep ${g.keep.split("/").pop()}</p>
+           <button class="btn danger" data-keep="${g.keep}" data-paths='${JSON.stringify(g.files.map((f) => f.path))}'>Trash extras</button>
+           <p class="meta">${g.files.map((f) => f.name + " " + f.label).join(" · ")}</p></div>`
+      )
       .join("");
   document.querySelector("#tab-dupes").innerHTML = html || "<p class='meta'>No duplicates over 256 KB.</p>";
+  document.querySelectorAll("#tab-dupes [data-keep]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const paths = JSON.parse(btn.dataset.paths);
+      const res = await fetch("/api/dupes/purge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keep: btn.dataset.keep, paths }),
+      }).then((r) => r.json());
+      statusEl.textContent = res.ok ? `Trashed ${res.n} extras` : res.error;
+      if (res.ok) startScan(pathInput.value.trim());
+    });
+  });
 });
 
 document.querySelector('[data-tab="plan"]').addEventListener("click", async () => {
@@ -204,14 +350,55 @@ document.querySelector('[data-tab="plan"]').addEventListener("click", async () =
   }
   const files = (data.plan && data.plan.files) || [];
   document.querySelector("#tab-plan").innerHTML =
-    `<p class="meta">${data.plan.count} files would move. Dry-run only — run the CLI to apply.</p>` +
+    `<p class="meta">${data.plan.count} files would move into category folders.</p>
+     <button class="btn" id="apply-plan" type="button">Apply organize</button>` +
     table(
-      files.slice(0, 40).map((f) => ({ name: f.source.split("/").pop(), path: f.source, category: f.category, dest: f.destination })),
+      files.slice(0, 40).map((f) => ({
+        name: f.source.split("/").pop(),
+        path: f.source,
+        category: f.category,
+      })),
       [
         { label: "File", render: (r) => r.name },
         { label: "Category", render: (r) => r.category },
       ]
     );
+  const apply = document.querySelector("#apply-plan");
+  if (apply) {
+    apply.addEventListener("click", async () => {
+      if (!confirm("Move files into category folders? Undo is available from the CLI.")) return;
+      const res = await fetch("/api/organize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: scan.root, recursive: false, apply: true }),
+      }).then((r) => r.json());
+      statusEl.textContent = res.ok ? `Moved ${res.moved} files` : res.error;
+      if (res.ok) startScan(pathInput.value.trim());
+    });
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.target && ["INPUT", "TEXTAREA"].includes(event.target.tagName)) return;
+  if (event.key === "Backspace") {
+    event.preventDefault();
+    zoomOut();
+  }
+  if (event.key === "Enter" && pathInput.value) startScan(pathInput.value.trim());
+  if (event.key === "b" && (event.metaKey || event.ctrlKey)) {
+    event.preventDefault();
+    document.querySelector("#browse").click();
+  }
+});
+
+document.body.addEventListener("dragover", (event) => event.preventDefault());
+document.body.addEventListener("drop", (event) => {
+  event.preventDefault();
+  const file = event.dataTransfer.files[0];
+  if (file && file.path) {
+    pathInput.value = file.path;
+    startScan(file.path);
+  }
 });
 
 loadRoots().then(async () => {
@@ -219,7 +406,7 @@ loadRoots().then(async () => {
   if (st.root) {
     pathInput.value = st.root;
     if (st.status === "done" || st.status === "running") {
-      if (!pollTimer) pollTimer = setInterval(poll, 400);
+      if (!pollTimer) pollTimer = setInterval(poll, 350);
       poll();
       return;
     }

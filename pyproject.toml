@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "file-organiser"
-version = "2.0.0"
+version = "3.0.0"
 description = "Desktop disk map and file organiser — sunburst usage, duplicates, organize, undo. Download and run locally."
 readme = "README.md"
 license = { text = "MIT" }

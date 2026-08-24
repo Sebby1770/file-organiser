@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
-from .disk import candidate_roots, scan_usage, text_map
+from .disk import candidate_roots, prune_tree, scan_usage, text_map
 from .duplicates import choose_keeper, find_duplicates, reclaimable_bytes
 from .explain import explain_path
 from .organizer import build_preview_plan
@@ -36,6 +36,8 @@ class AppState:
         self.bytes = 0
         self.error = ""
         self.rules = load_rules(None)
+        self.cancel = False
+        self.maps = None
 
     def allowed(self, path: Path) -> bool:
         if self.root is None:
@@ -62,6 +64,42 @@ def _trash(path: Path) -> str:
         else:
             path.unlink()
         return "deleted"
+
+
+def _pick_folder() -> str | None:
+    """Native folder dialog. Returns a path or None if cancelled."""
+    try:
+        if sys.platform == "darwin":
+            out = subprocess.check_output(
+                ["osascript", "-e", "POSIX path of (choose folder)"],
+                stderr=subprocess.DEVNULL,
+            )
+            return out.decode().strip()
+        if sys.platform.startswith("win"):
+            out = subprocess.check_output(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; if ($f.ShowDialog() -eq 'OK') { $f.SelectedPath }",
+                ]
+            )
+            text = out.decode().strip()
+            return text or None
+        out = subprocess.check_output(["zenity", "--file-selection", "--directory"], stderr=subprocess.DEVNULL)
+        return out.decode().strip()
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+
+            root = tk.Tk()
+            root.withdraw()
+            chosen = filedialog.askdirectory()
+            root.destroy()
+            return chosen or None
+        except Exception:
+            return None
 
 
 def _reveal(path: Path) -> None:
@@ -150,6 +188,24 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
             if route == "/api/dupes":
                 self._json(self._do_dupes(body))
                 return
+            if route == "/api/dupes/purge":
+                self._json(self._purge_dupes(body))
+                return
+            if route == "/api/zoom":
+                self._json(self._zoom(body))
+                return
+            if route == "/api/pick":
+                chosen = _pick_folder()
+                if not chosen:
+                    self._json({"ok": False, "error": "cancelled"})
+                    return
+                self._json({"ok": True, "path": chosen})
+                return
+            if route == "/api/cancel":
+                with STATE.lock:
+                    STATE.cancel = True
+                self._json({"ok": True})
+                return
             self._json({"error": "not found"}, 404)
 
         def _start_scan(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -172,6 +228,8 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                 STATE.error = ""
                 STATE.visited = 0
                 STATE.bytes = 0
+                STATE.cancel = False
+                STATE.maps = None
 
             def job() -> None:
                 try:
@@ -180,9 +238,15 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                             STATE.visited = n
                             STATE.bytes = b
 
-                    result = scan_usage(folder, rules=STATE.rules, progress=prog)
+                    result, maps = scan_usage(
+                        folder,
+                        rules=STATE.rules,
+                        progress=prog,
+                        cancel=lambda: STATE.cancel,
+                    )
                     with STATE.lock:
                         STATE.result = result
+                        STATE.maps = maps
                         STATE.status = "done"
                         STATE.visited = result["visited"]
                         STATE.bytes = result["size"]
@@ -223,7 +287,49 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                 use_magic=bool(body.get("magic", True)),
                 use_smart=bool(body.get("smart", True)),
             )
+            if body.get("apply"):
+                from io import StringIO
+
+                from rich.console import Console
+
+                from .organizer import organize
+
+                n = organize(
+                    folder,
+                    STATE.rules,
+                    Console(file=StringIO()),
+                    dry_run=False,
+                    recursive=bool(body.get("recursive", True)),
+                    use_magic=True,
+                    use_smart=True,
+                    force=bool(body.get("force")),
+                )
+                return {"ok": True, "plan": plan, "moved": n}
             return {"ok": True, "plan": plan}
+
+        def _zoom(self, body: dict[str, Any]) -> dict[str, Any]:
+            target = Path(str(body.get("path") or "")).expanduser()
+            if not STATE.maps or not STATE.allowed(target) or not target.is_dir():
+                return {"ok": False, "error": "scan this folder first"}
+            tree = prune_tree(target, STATE.maps.dir_size, STATE.maps.dir_files, depth=0, rules=STATE.rules)
+            tree["label"] = format_size(int(tree.get("size") or 0))
+            return {"ok": True, "tree": tree}
+
+        def _purge_dupes(self, body: dict[str, Any]) -> dict[str, Any]:
+            paths = [Path(p) for p in (body.get("paths") or [])]
+            keep = Path(str(body.get("keep") or ""))
+            done = []
+            for path in paths:
+                try:
+                    path = path.resolve()
+                except OSError:
+                    continue
+                if keep and path == keep.resolve():
+                    continue
+                if not STATE.allowed(path) or not path.exists():
+                    continue
+                done.append({"path": str(path), "action": _trash(path)})
+            return {"ok": True, "n": len(done), "files": done}
 
         def _do_dupes(self, body: dict[str, Any]) -> dict[str, Any]:
             folder = Path(str(body.get("path") or (STATE.root or ""))).expanduser()
@@ -298,5 +404,5 @@ def launch(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = None
 
 
 def map_text(folder: Path) -> str:
-    result = scan_usage(folder)
+    result, _maps = scan_usage(folder)
     return text_map(result)

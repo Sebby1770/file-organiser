@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/Sebby1770/file-organiser/actions/workflows/ci.yml/badge.svg)](https://github.com/Sebby1770/file-organiser/actions/workflows/ci.yml)
 
-**A disk map you can download and run — then organize, dedupe, and undo.**
+**A disk map you can download and run — then zoom, reclaim, organize, and undo.**
 
 Site: [https://sebby1770.github.io/file-organiser/](https://sebby1770.github.io/file-organiser/)
 
@@ -19,7 +19,7 @@ file-organiser app
 file-organiser app ~/Downloads
 ```
 
-That opens a local desktop UI in your browser (`127.0.0.1`). Your files never leave the machine.
+That opens a local desktop UI. Sunburst or treemap, double-click to zoom, Browse for a native folder picker, reclaim estimates (caches + stale + empty), trash duplicate extras, apply organize. Your files never leave the machine.
 
 Build a standalone binary (macOS / Windows / Linux):
 

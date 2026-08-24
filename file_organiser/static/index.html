@@ -10,24 +10,36 @@
     <header class="top">
       <div class="brand"><span class="mark"></span>File Organiser</div>
       <form class="pathbar" id="path-form">
+        <button class="btn ghost" type="button" id="browse">Browse</button>
         <input id="path" type="text" spellcheck="false" placeholder="/Users/you/Downloads" />
         <button class="btn" type="submit">Scan</button>
+        <button class="btn ghost" type="button" id="cancel">Stop</button>
       </form>
-      <p class="status" id="status">Pick a folder. Scan. See where the bytes went.</p>
+      <p class="status" id="status">Scan a folder. Click a slice to inspect. Double-click to zoom.</p>
     </header>
+    <div class="progress" id="progress" hidden><i id="pbar"></i></div>
     <div class="shell">
       <aside class="rail" id="roots"></aside>
       <section class="stage">
+        <div class="tools">
+          <button type="button" class="btn ghost" id="view-sun" data-view="sun">Sunburst</button>
+          <button type="button" class="btn ghost" id="view-tree" data-view="tree">Treemap</button>
+          <button type="button" class="btn ghost" id="zoom-out">Up</button>
+        </div>
         <canvas id="sun" width="720" height="720" aria-label="Disk map"></canvas>
         <p class="crumb" id="crumb"></p>
+        <div class="tip" id="tip" hidden></div>
       </section>
       <aside class="inspect" id="inspect">
         <p class="eyebrow">Inspector</p>
         <h2 id="i-name">—</h2>
         <p class="size" id="i-size">—</p>
-        <p class="meta" id="i-meta">Click a slice.</p>
+        <p class="meta" id="i-meta">Click a slice. Double-click a folder to zoom.</p>
+        <div class="vol" id="vol" hidden></div>
+        <div class="waste" id="waste" hidden></div>
         <div class="cta" id="i-actions" hidden>
           <button class="btn ghost" type="button" id="reveal">Reveal</button>
+          <button class="btn ghost" type="button" id="copy">Copy path</button>
           <button class="btn danger" type="button" id="trash">Trash</button>
           <button class="btn ghost" type="button" id="why">Why</button>
         </div>
@@ -41,12 +53,14 @@
         <button type="button" data-tab="cats">Types</button>
         <button type="button" data-tab="dupes">Duplicates</button>
         <button type="button" data-tab="plan">Organize</button>
+        <button type="button" data-tab="reclaim">Reclaim</button>
       </nav>
       <div class="tab on" id="tab-largest"></div>
       <div class="tab" id="tab-stale"></div>
       <div class="tab" id="tab-cats"></div>
       <div class="tab" id="tab-dupes"></div>
       <div class="tab" id="tab-plan"></div>
+      <div class="tab" id="tab-reclaim"></div>
     </section>
     <script src="/sunburst.js"></script>
     <script src="/app.js"></script>
