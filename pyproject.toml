@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "file-organiser"
-version = "3.0.0"
-description = "Desktop disk map and file organiser — sunburst usage, duplicates, organize, undo. Download and run locally."
+version = "4.0.0"
+description = "Desktop app that scans your computer and tells you what to delete, what to review, and what to keep."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
@@ -14,6 +14,8 @@ keywords = ["files", "organiser", "organizer", "cli", "duplicates", "watch"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
+    "Environment :: MacOS X",
+    "Environment :: Win32 (MS Windows)",
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
@@ -26,6 +28,7 @@ classifiers = [
 ]
 dependencies = [
     "rich>=13.0.0",
+    "send2trash>=1.8",
 ]
 
 [project.optional-dependencies]
@@ -36,6 +39,9 @@ test = ["pytest>=7"]
 [project.scripts]
 file-organiser = "file_organiser.cli:main"
 file-organizer = "file_organiser.cli:main"
+
+[project.gui-scripts]
+FileOrganiser = "file_organiser.launch:run_desktop"
 
 [project.urls]
 Homepage = "https://sebby1770.github.io/file-organiser/"

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from .clean import DEFAULT_JUNK_PATTERNS, matches_junk_name
 from .rules import category_for_path, load_rules
 from .scanner import format_size
 
@@ -32,10 +33,20 @@ CACHE_DIR_NAMES = {
     ".venv",
     "venv",
     "Caches",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".parcel-cache",
+    ".next",
+    ".turbo",
+    ".ccache",
+    "pip-wheel-metadata",
 }
+INSTALLER_EXTS = {".dmg", ".pkg", ".msi", ".exe", ".deb", ".rpm", ".appimage"}
 _MAX_LARGEST = 80
 _MAX_STALE = 50
 _MAX_EMPTY = 50
+_MAX_HINTS = 80
 _FAN = 20
 _DEPTH = 3
 
@@ -50,7 +61,7 @@ def candidate_roots() -> list[dict[str, str]]:
     """Folders a person actually wants to open on this machine."""
     home = Path.home()
     names = [
-        ("Home", home),
+        ("This computer", home),
         ("Downloads", home / "Downloads"),
         ("Documents", home / "Documents"),
         ("Desktop", home / "Desktop"),
@@ -59,6 +70,9 @@ def candidate_roots() -> list[dict[str, str]]:
         ("Music", home / "Music"),
     ]
     if sys.platform == "darwin":
+        caches = home / "Library" / "Caches"
+        if caches.is_dir():
+            names.append(("App caches", caches))
         vols = Path("/Volumes")
         if vols.is_dir():
             try:
@@ -147,6 +161,9 @@ def scan_usage(
     cache_bytes = 0
     cache_files = 0
     empty_dirs: list[str] = []
+    junk_rows: list[dict[str, Any]] = []
+    empty_files: list[dict[str, Any]] = []
+    installer_rows: list[dict[str, Any]] = []
     errors = 0
     visited = 0
     now = time.time()
@@ -166,7 +183,8 @@ def scan_usage(
         dirnames[:] = keep
         dir_had_file = False
         for name in filenames:
-            if skip_hidden and name.startswith("."):
+            is_junk = matches_junk_name(name, DEFAULT_JUNK_PATTERNS) or name.endswith(".pyc")
+            if skip_hidden and name.startswith(".") and not is_junk:
                 continue
             path = current / name
             try:
@@ -187,6 +205,29 @@ def scan_usage(
             if _is_cache_path(path, root):
                 cache_bytes += size
                 cache_files += 1
+            if is_junk and len(junk_rows) < _MAX_HINTS:
+                junk_rows.append(
+                    {
+                        "path": str(path),
+                        "name": name,
+                        "size": size,
+                        "label": format_size(size),
+                        "reason": "Junk leftover (.DS_Store, Thumbs.db, temp, bytecode).",
+                    }
+                )
+            if size == 0 and len(empty_files) < _MAX_HINTS:
+                empty_files.append({"path": str(path), "name": name, "size": 0, "label": "0B"})
+            suffix = path.suffix.lower()
+            if suffix in INSTALLER_EXTS and len(installer_rows) < _MAX_HINTS:
+                installer_rows.append(
+                    {
+                        "path": str(path),
+                        "name": name,
+                        "size": size,
+                        "label": format_size(size),
+                        "age_days": round((now - mtime) / 86400, 1),
+                    }
+                )
             item = (size, str(path), mtime, cat)
             if len(largest) < _MAX_LARGEST:
                 heapq.heappush(largest, item)
@@ -213,6 +254,7 @@ def scan_usage(
         {"category": k, "size": v, "files": cat_files[k], "label": format_size(v)}
         for k, v in sorted(cat_size.items(), key=lambda kv: -kv[1])
     ]
+    cache_dirs = _outermost_cache_dirs(dir_size, dir_files, root)
     result = {
         "root": str(root),
         "name": root.name or str(root),
@@ -227,6 +269,10 @@ def scan_usage(
         "stale": stale_rows,
         "categories": categories,
         "empty_dirs": empty_dirs[:_MAX_EMPTY],
+        "cache_dirs": cache_dirs,
+        "junk": junk_rows[:_MAX_HINTS],
+        "empty_files": empty_files[:_MAX_HINTS],
+        "installers": installer_rows[:_MAX_HINTS],
         "volume": volume_stats(root),
         "waste": {
             "caches": cache_bytes,
@@ -240,6 +286,39 @@ def scan_usage(
         },
     }
     return result, ScanMaps(dir_size=dict(dir_size), dir_files=dict(dir_files))
+
+
+def _outermost_cache_dirs(
+    dir_size: dict[Path, int],
+    dir_files: dict[Path, int],
+    root: Path,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for path, size in dir_size.items():
+        if path == root or path.name not in CACHE_DIR_NAMES:
+            continue
+        nested = False
+        parent = path.parent
+        while parent != path:
+            if parent.name in CACHE_DIR_NAMES:
+                nested = True
+                break
+            if parent == root or parent.parent == parent:
+                break
+            parent = parent.parent
+        if nested:
+            continue
+        rows.append(
+            {
+                "path": str(path),
+                "name": path.name,
+                "size": int(size),
+                "files": int(dir_files.get(path, 0)),
+                "label": format_size(int(size)),
+            }
+        )
+    rows.sort(key=lambda r: -int(r["size"]))
+    return rows[:_MAX_HINTS]
 
 
 def prune_tree(

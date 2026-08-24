@@ -3,94 +3,159 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>file-organiser — preview first, then sort</title>
-    <meta name="description" content="A local Python desk for messy folders. Magic bytes, smart names, undo, doctor. This site is a planner — nothing on your disk moves." />
+    <title>File Organiser — scan, then we’ll tell you what to delete</title>
+    <meta name="description" content="A desktop app for your computer. Scan the disk. See what is safe to delete, what to review, and what to keep. Double-click. Nothing is uploaded." />
+    <meta property="og:title" content="File Organiser 4" />
+    <meta property="og:description" content="Scan this computer. We’ll tell you what to delete — and what to leave alone." />
+    <link rel="icon" href="./icon.jpg" />
+    <link rel="apple-touch-icon" href="./icon.jpg" />
     <link rel="stylesheet" href="site.css" />
   </head>
   <body>
     <header>
-      <a class="word" href="./">file-organiser</a>
+      <a class="word" href="./"><img src="./icon.jpg" alt="" width="28" height="28" /> File Organiser</a>
       <nav>
-        <a href="#get">Get the app</a>
-        <a href="#about">About</a>
-        <a href="#does">What it does</a>
-        <a href="#help">How it helps</a>
-        <a href="#demo">Planner</a>
+        <a href="#download">Download</a>
+        <a href="#advice">Advice</a>
+        <a href="#how">How it works</a>
         <a href="#safety">Safety</a>
         <a href="https://github.com/Sebby1770/file-organiser">GitHub</a>
       </nav>
     </header>
     <main>
       <section class="hero">
-        <p class="eyebrow">Python CLI · v3.0 · MIT · local</p>
-        <h1>Preview first.<br />Then sort the landfill.</h1>
+        <p class="eyebrow">Desktop app · v4.0 · local · MIT</p>
+        <h1>Scan this computer.<br />We’ll say what to delete.</h1>
         <p class="lede">
-          A Downloads folder is a crime scene. file-organiser writes a plan —
-          by type, date, magic bytes, and the names files actually wear — then
-          moves only if you say so. Undo is a journal, not a prayer. This page
-          is the planner. The CLI is the desk.
+          File Organiser is an app you run on your machine — not a command you type.
+          It maps the disk, then splits every heavy folder into
+          <strong>Delete</strong>, <strong>Review</strong>, and <strong>Keep</strong>.
+          Caches and old installers go on Delete. Photos, documents, and keys stay on Keep.
+          Nothing leaves this computer.
         </p>
-        <p>
-          <a class="btn" href="#get">Get the app</a>
-          <a class="btn ghost" href="#demo">Planner</a>
+        <p class="hero-actions">
+          <a class="btn" id="primary-dl" href="https://github.com/Sebby1770/file-organiser/releases/latest">Download the app</a>
+          <a class="btn ghost" href="#how">See how it works</a>
+        </p>
+        <p class="os-line" id="os-line">macOS, Windows, and Linux. Double-click. No Terminal.</p>
+      </section>
+
+      <section class="stage-wrap" id="advice">
+        <p class="eyebrow">What you see after a scan</p>
+        <h2>Three columns. A reason on every row.</h2>
+        <div class="product">
+          <aside class="product-chrome">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            <span class="title">File Organiser</span>
+          </aside>
+          <p class="headline-mock">Safe to delete about 4.4 GB. Check 800 MB more before you touch it.</p>
+          <div class="mock-cols">
+            <article class="mock delete">
+              <h3>Delete</h3>
+              <p class="sum">4.4 GB · 12 items</p>
+              <p class="hint">Caches, junk, old installers.</p>
+              <ul>
+                <li><b>1.4 GB</b> node_modules — Regenerable cache.</li>
+                <li><b>890 MB</b> Chrome Cache — Apps recreate this.</li>
+                <li><b>2.1 GB</b> Install macOS.dmg — Old installer in Downloads.</li>
+                <li><b>12 KB</b> .DS_Store — Junk leftover.</li>
+              </ul>
+            </article>
+            <article class="mock review">
+              <h3>Review</h3>
+              <p class="sum">800 MB · 6 items</p>
+              <p class="hint">Large, stale, or duplicate. You decide.</p>
+              <ul>
+                <li><b>4.6 GB</b> holiday.mov — Untouched for 2 years. Open it first.</li>
+                <li><b>220 MB</b> IMG_4032 copy — Duplicate. Keep one.</li>
+                <li><b>80 MB</b> project/dist — Looks like build output.</li>
+              </ul>
+            </article>
+            <article class="mock keep">
+              <h3>Keep</h3>
+              <p class="sum">12 GB · leave it</p>
+              <p class="hint">Photos, documents, code, keys.</p>
+              <ul>
+                <li><b>8.1 GB</b> Pictures — Your files live here.</li>
+                <li><b>2.4 GB</b> Documents — We do not auto-trash your work.</li>
+                <li><b>—</b> .ssh — Keys. Protected.</li>
+              </ul>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="download">
+        <h2>Get the app on your computer</h2>
+        <p class="lede">
+          This website never sees your files. Download the app, double-click it,
+          press <em>Scan this computer</em>. That’s the whole setup.
+        </p>
+        <div class="dl-grid">
+          <a class="dl" href="https://github.com/Sebby1770/file-organiser/releases/latest">
+            <span class="kicker">macOS</span>
+            <strong>Download for Mac</strong>
+            <span>FileOrganiser.app · Apple silicon &amp; Intel via Actions</span>
+          </a>
+          <a class="dl" href="https://github.com/Sebby1770/file-organiser/releases/latest">
+            <span class="kicker">Windows</span>
+            <strong>Download for Windows</strong>
+            <span>FileOrganiser.exe · no installer required</span>
+          </a>
+          <a class="dl" href="https://github.com/Sebby1770/file-organiser/releases/latest">
+            <span class="kicker">Linux</span>
+            <strong>Download for Linux</strong>
+            <span>FileOrganiser · x86_64 binary</span>
+          </a>
+        </div>
+        <p class="fine">
+          GitHub → Releases → latest. If a release isn’t up yet, Actions →
+          <code>release-app</code> builds one per OS.
+          Developers can run <code>python3 -m file_organiser</code> with no extra words —
+          that still opens the app, not a prompt for a subcommand.
         </p>
       </section>
-      <ol class="pipe">
-        <li><span>01</span><strong>Scan</strong><p>Extensions, headers, Screenshot/IMG_/invoice names.</p></li>
-        <li><span>02</span><strong>Plan</strong><p>JSON you can read, save, and <code>apply</code> later.</p></li>
-        <li><span>03</span><strong>Move</strong><p>Or copy. Or symlink. Date nests if you ask.</p></li>
-        <li><span>04</span><strong>Undo</strong><p>A stack in the folder. Walk it back.</p></li>
-      </ol>
-      <section id="get">
-        <h2>Download and use it on your computer</h2>
-        <p>
-          This is not a website that sees your files. Install it, then run the
-          desktop map: a sunburst of where bytes went, largest and stale files,
-          duplicates you can reclaim, organize preview, reveal in Finder, trash.
-          DaisyDisk shows a pretty ring. This one also <em>does something</em>
-          about the mess.
-        </p>
-        <pre><code>python3 -m pip install -e ".[trash]"
-file-organiser app
-# or
-file-organiser app ~/Downloads
-file-organiser map ~/Downloads</code></pre>
-        <p>macOS / Windows / Linux binaries: GitHub → Actions → <code>release-app</code> artifacts, or <code>python scripts/build_app.py</code>.</p>
+
+      <section id="how">
+        <h2>How it works</h2>
+        <ol class="pipe">
+          <li><span>01</span><strong>Scan this computer</strong><p>Home, Downloads, Pictures, or any folder. Caches count. A sunburst shows where the bytes went.</p></li>
+          <li><span>02</span><strong>Read the advice</strong><p>Delete is regenerable junk. Review is large or stale. Keep is your life — photos, documents, keys, git.</p></li>
+          <li><span>03</span><strong>Trash what you check</strong><p>Only the Delete column can be sent to Trash in bulk. Review never auto-deletes. Keep is locked.</p></li>
+          <li><span>04</span><strong>Stay on this machine</strong><p>The app is a local window. No account. No upload. Quit and it stops.</p></li>
+        </ol>
       </section>
-      <section id="about">
-        <h2>What this site is</h2>
-        <p>
-          Names you type here never leave the browser. The same rules the CLI
-          uses decide a category. On your machine, <code>file-organiser web --folder ~/Downloads</code>
-          serves this page plus a live preview of the real folder.
-        </p>
-      </section>
+
       <section id="does">
-        <h2>What it does</h2>
+        <h2>What it does that a pretty ring doesn’t</h2>
         <div class="grid3">
-          <article><h3>Organize</h3><p>Images, documents, ebooks, video, code, design, 3D. <code>--magic --smart</code> when the extension lies.</p></article>
-          <article><h3>Dedupe</h3><p>SHA-256 groups. Keep oldest, newest, or largest. Reclaimable bytes printed every time.</p></article>
-          <article><h3>Doctor · why</h3><p>Permissions, journal, empty files. <code>why FILE</code> prints the chain: extension, name, bytes, MIME, final.</p></article>
+          <article><h3>Tells you what to delete</h3><p>node_modules, __pycache__, browser caches, .DS_Store, empty files, old .dmg/.exe in Downloads — with a sentence of why.</p></article>
+          <article><h3>Tells you what to keep</h3><p>Pictures, Documents, Movies, Mail, Photos libraries, .ssh. The app will refuse to trash a home folder or a drive root.</p></article>
+          <article><h3>Then does the work</h3><p>Trash checked items, reclaim duplicate extras, organize Downloads into categories, reveal in Finder. Undo lives in the folder.</p></article>
         </div>
       </section>
-      <section id="help">
-        <h2>How it can help</h2>
-        <div class="grid3">
-          <article><h3>Landfill Downloads</h3><p><code>preview</code> then <code>organize --dry-run</code>. Recursive if the mess went deep. Age filters: <code>--older-than 30d</code>.</p></article>
-          <article><h3>Liars</h3><p>A PNG named <code>notes.bin</code> is still an image. Invoice in the filename is still a document.</p></article>
-          <article><h3>Watch</h3><p>Native events if watchdog is installed. Otherwise it polls. New files get a category without you opening Finder.</p></article>
-        </div>
+
+      <section id="safety">
+        <h2>House rules</h2>
+        <ol class="walk">
+          <li>Nothing is uploaded. The scan never leaves localhost.</li>
+          <li>The app will not organize or trash <code>$HOME</code> or <code>/</code> as a whole.</li>
+          <li>Bulk trash only accepts items already classified as Delete.</li>
+          <li>Keys, mail, photo libraries, and version control are Keep — always.</li>
+          <li>You confirm every trash action. There is no “clean my Mac” that fires itself.</li>
+        </ol>
       </section>
+
       <section id="demo">
-        <h2>Planner</h2>
-        <p>Paste names, or load a sample mess. Toggle date nests. Nothing is uploaded.</p>
+        <h2>Category planner</h2>
+        <p>A small, in-browser toy for names — not a disk scan. Useful if you want to see how a file would be filed. Your disk is never touched from this page.</p>
         <p class="packs">
           <button type="button" class="btn ghost" data-pack="downloads">Sample Downloads</button>
           <button type="button" class="btn ghost" data-pack="camera">Camera roll</button>
           <button type="button" class="btn ghost" data-pack="desk">Student desk</button>
         </p>
         <label class="check"><input type="checkbox" id="by-date" /> nest Category/YYYY/MM</label>
-        <textarea id="names" rows="9"></textarea>
+        <textarea id="names" rows="7"></textarea>
         <p><button class="btn" id="plan" type="button">Plan moves</button></p>
         <p class="stats" id="stats"></p>
         <table>
@@ -98,25 +163,12 @@ file-organiser map ~/Downloads</code></pre>
           <tbody id="out"><tr><td colspan="3">Load a pack or paste names.</td></tr></tbody>
         </table>
       </section>
-      <section id="safety">
-        <h2>House rules</h2>
-        <ol class="walk">
-          <li>It will not organize <code>$HOME</code> or <code>/</code> unless you pass <code>--i-mean-it</code>.</li>
-          <li>Clean and rename are dry-run until <code>--apply</code>.</li>
-          <li>Undo lives in the folder as a journal, last ten snapshots.</li>
-          <li>A feed of names on this site is a plan, not a move.</li>
-        </ol>
-      </section>
-      <section>
-        <h2>On a machine</h2>
-        <pre><code>pip install -e ".[test]"
-file-organiser preview ~/Downloads --magic --smart --older-than 7d
-file-organiser why ~/Downloads/mystery.bin
-file-organiser doctor ~/Downloads
-file-organiser web --folder ~/Downloads --port 8765</code></pre>
-      </section>
     </main>
-    <footer>file-organiser 3.0 · local app · <a href="https://github.com/Sebby1770/file-organiser">source</a></footer>
+    <footer>
+      File Organiser 4.0 · local app ·
+      <a href="https://github.com/Sebby1770/file-organiser">source</a> ·
+      <a href="https://github.com/Sebby1770/file-organiser/releases/latest">download</a>
+    </footer>
     <script src="site.js"></script>
   </body>
 </html>

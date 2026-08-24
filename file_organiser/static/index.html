@@ -10,58 +10,113 @@
     <header class="top">
       <div class="brand"><span class="mark"></span>File Organiser</div>
       <form class="pathbar" id="path-form">
-        <button class="btn ghost" type="button" id="browse">Browse</button>
-        <input id="path" type="text" spellcheck="false" placeholder="/Users/you/Downloads" />
+        <button class="btn ghost" type="button" id="browse">Choose folder</button>
+        <input id="path" type="text" spellcheck="false" placeholder="Scan this computer, or pick a folder" />
         <button class="btn" type="submit">Scan</button>
         <button class="btn ghost" type="button" id="cancel">Stop</button>
       </form>
-      <p class="status" id="status">Scan a folder. Click a slice to inspect. Double-click to zoom.</p>
+      <p class="status" id="status">Scan this computer. We’ll say what to delete, what to review, and what to keep.</p>
     </header>
     <div class="progress" id="progress" hidden><i id="pbar"></i></div>
-    <div class="shell">
-      <aside class="rail" id="roots"></aside>
-      <section class="stage">
-        <div class="tools">
-          <button type="button" class="btn ghost" id="view-sun" data-view="sun">Sunburst</button>
-          <button type="button" class="btn ghost" id="view-tree" data-view="tree">Treemap</button>
-          <button type="button" class="btn ghost" id="zoom-out">Up</button>
-        </div>
-        <canvas id="sun" width="720" height="720" aria-label="Disk map"></canvas>
-        <p class="crumb" id="crumb"></p>
-        <div class="tip" id="tip" hidden></div>
-      </section>
-      <aside class="inspect" id="inspect">
-        <p class="eyebrow">Inspector</p>
-        <h2 id="i-name">—</h2>
-        <p class="size" id="i-size">—</p>
-        <p class="meta" id="i-meta">Click a slice. Double-click a folder to zoom.</p>
-        <div class="vol" id="vol" hidden></div>
-        <div class="waste" id="waste" hidden></div>
-        <div class="cta" id="i-actions" hidden>
-          <button class="btn ghost" type="button" id="reveal">Reveal</button>
-          <button class="btn ghost" type="button" id="copy">Copy path</button>
-          <button class="btn danger" type="button" id="trash">Trash</button>
-          <button class="btn ghost" type="button" id="why">Why</button>
-        </div>
-        <pre class="why" id="i-why" hidden></pre>
-      </aside>
-    </div>
-    <section class="dock">
-      <nav class="tabs" id="tabs">
-        <button type="button" data-tab="largest" class="on">Largest</button>
-        <button type="button" data-tab="stale">Stale</button>
-        <button type="button" data-tab="cats">Types</button>
-        <button type="button" data-tab="dupes">Duplicates</button>
-        <button type="button" data-tab="plan">Organize</button>
-        <button type="button" data-tab="reclaim">Reclaim</button>
-      </nav>
-      <div class="tab on" id="tab-largest"></div>
-      <div class="tab" id="tab-stale"></div>
-      <div class="tab" id="tab-cats"></div>
-      <div class="tab" id="tab-dupes"></div>
-      <div class="tab" id="tab-plan"></div>
-      <div class="tab" id="tab-reclaim"></div>
+
+    <section class="welcome" id="welcome">
+      <p class="eyebrow">Local app · nothing uploaded · v4</p>
+      <h1>See what’s eating the disk.</h1>
+      <p class="lede">
+        Scan this computer. File Organiser maps every folder, then tells you
+        what is safe to delete, what you should look at, and what to leave alone.
+        Trash is a button you press — never an automatic wipe.
+      </p>
+      <p class="hero-actions">
+        <button class="btn" type="button" id="scan-computer">Scan this computer</button>
+        <button class="btn ghost" type="button" id="scan-downloads">Scan Downloads</button>
+        <button class="btn ghost" type="button" id="welcome-browse">Choose a folder</button>
+      </p>
+      <ol class="steps">
+        <li><span>01</span><strong>Scan</strong> Home, Downloads, or any folder. Caches count.</li>
+        <li><span>02</span><strong>Advise</strong> Delete · Review · Keep, with a reason on every row.</li>
+        <li><span>03</span><strong>Trash</strong> Only the items you check. Protected paths stay put.</li>
+      </ol>
     </section>
+
+    <div class="workspace" id="workspace" hidden>
+      <div class="shell">
+        <aside class="rail" id="roots"></aside>
+        <section class="stage">
+          <div class="tools">
+            <button type="button" class="btn ghost" id="view-sun" data-view="sun">Sunburst</button>
+            <button type="button" class="btn ghost" id="view-tree" data-view="tree">Treemap</button>
+            <button type="button" class="btn ghost" id="zoom-out">Up</button>
+          </div>
+          <canvas id="sun" width="720" height="720" aria-label="Disk map"></canvas>
+          <p class="crumb" id="crumb"></p>
+          <div class="tip" id="tip" hidden></div>
+        </section>
+        <aside class="inspect" id="inspect">
+          <p class="eyebrow">Inspector</p>
+          <h2 id="i-name">—</h2>
+          <p class="size" id="i-size">—</p>
+          <p class="meta" id="i-meta">Click a slice. Double-click a folder to zoom.</p>
+          <div class="vol" id="vol" hidden></div>
+          <div class="waste" id="waste" hidden></div>
+          <div class="cta" id="i-actions" hidden>
+            <button class="btn ghost" type="button" id="reveal">Reveal</button>
+            <button class="btn ghost" type="button" id="copy">Copy path</button>
+            <button class="btn danger" type="button" id="trash">Trash</button>
+            <button class="btn ghost" type="button" id="why">Why</button>
+          </div>
+          <pre class="why" id="i-why" hidden></pre>
+        </aside>
+      </div>
+
+      <section class="board" id="board">
+        <header class="board-head">
+          <div>
+            <p class="eyebrow">Advice</p>
+            <h2 id="headline">What to delete, what to keep</h2>
+          </div>
+          <p class="board-note">Checked items on Delete go to Trash. Review never auto-deletes. Keep is locked.</p>
+        </header>
+        <div class="cols">
+          <article class="col delete" id="col-delete">
+            <h3>Delete</h3>
+            <p class="sum" id="sum-delete">—</p>
+            <p class="hint">Caches, junk, old installers. Regenerable or leftover.</p>
+            <div class="list" id="list-delete"></div>
+            <button class="btn danger" type="button" id="trash-checked">Trash checked</button>
+          </article>
+          <article class="col review" id="col-review">
+            <h3>Review</h3>
+            <p class="sum" id="sum-review">—</p>
+            <p class="hint">Large, stale, or duplicate. Open it before you trash it.</p>
+            <div class="list" id="list-review"></div>
+          </article>
+          <article class="col keep" id="col-keep">
+            <h3>Keep</h3>
+            <p class="sum" id="sum-keep">—</p>
+            <p class="hint">Photos, documents, code, keys. We will not trash these.</p>
+            <div class="list" id="list-keep"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="dock">
+        <nav class="tabs" id="tabs">
+          <button type="button" data-tab="largest">Largest</button>
+          <button type="button" data-tab="stale">Stale</button>
+          <button type="button" data-tab="cats">Types</button>
+          <button type="button" data-tab="dupes">Duplicates</button>
+          <button type="button" data-tab="plan">Organize</button>
+          <button type="button" data-tab="reclaim">Reclaim</button>
+        </nav>
+        <div class="tab on" id="tab-largest"></div>
+        <div class="tab" id="tab-stale"></div>
+        <div class="tab" id="tab-cats"></div>
+        <div class="tab" id="tab-dupes"></div>
+        <div class="tab" id="tab-plan"></div>
+        <div class="tab" id="tab-reclaim"></div>
+      </section>
+    </div>
     <script src="/sunburst.js"></script>
     <script src="/app.js"></script>
   </body>

@@ -1,4 +1,4 @@
-"""Smart file organiser CLI — sort, dedupe, and watch folders by type and date."""
+"""File Organiser — desktop disk map that tells you what to delete and what to keep."""
 
-__version__ = "3.0.0"
+__version__ = "4.0.0"
 __all__ = ["__version__"]

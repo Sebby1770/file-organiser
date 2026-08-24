@@ -98,3 +98,16 @@ document.querySelectorAll("[data-pack]").forEach((btn) => {
 });
 document.querySelector("#names").value = PACKS.downloads;
 plan();
+
+(function markDownload() {
+  const ua = navigator.userAgent || "";
+  const btn = document.querySelector("#primary-dl");
+  const line = document.querySelector("#os-line");
+  if (!btn) return;
+  let os = "your computer";
+  if (/Mac/i.test(ua) && !/iPhone|iPad/i.test(ua)) os = "Mac";
+  else if (/Win/i.test(ua)) os = "Windows";
+  else if (/Linux/i.test(ua)) os = "Linux";
+  btn.textContent = "Download for " + os;
+  if (line) line.textContent = os + " · double-click the app · no Terminal";
+})();

@@ -1,4 +1,4 @@
-"""Allow ``python -m file_organiser``."""
+"""Allow ``python -m file_organiser``. No arguments opens the desktop app."""
 from __future__ import annotations
 
 import sys

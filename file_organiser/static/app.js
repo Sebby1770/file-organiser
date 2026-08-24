@@ -10,6 +10,7 @@ const inspect = {
   why: document.querySelector("#i-why"),
 };
 let scan = null;
+let advice = null;
 let slices = [];
 let treeHits = [];
 let selected = null;
@@ -26,6 +27,11 @@ function fmt(n) {
   return n + " B";
 }
 
+function showWorkspace() {
+  document.querySelector("#welcome").hidden = true;
+  document.querySelector("#workspace").hidden = false;
+}
+
 async function loadRoots() {
   const data = await fetch("/api/roots").then((r) => r.json());
   const rail = document.querySelector("#roots");
@@ -38,6 +44,11 @@ async function loadRoots() {
       startScan(btn.dataset.path);
     });
   });
+  return data.roots || [];
+}
+
+function rootByLabel(roots, label) {
+  return (roots || []).find((r) => r.label === label);
 }
 
 function showInspect(node) {
@@ -79,6 +90,44 @@ function table(rows, cols) {
     })
     .join("");
   return `<table><thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+
+function adviceRow(item, checkable) {
+  const box = checkable
+    ? `<input type="checkbox" checked data-path="${item.path.replace(/"/g, "&quot;")}" />`
+    : "";
+  return `<div class="row" data-path="${item.path.replace(/"/g, "&quot;")}">
+    ${box}
+    <span class="sz">${item.label}</span>
+    <span class="nm">${item.name}</span>
+    <p class="why-line">${item.reason}</p>
+  </div>`;
+}
+
+function fillAdvice(payload) {
+  advice = payload;
+  if (!payload || !payload.summary) return;
+  const s = payload.summary;
+  document.querySelector("#headline").textContent = s.headline;
+  document.querySelector("#sum-delete").textContent = `${s.delete_label} · ${s.delete_n} items`;
+  document.querySelector("#sum-review").textContent = `${s.review_label} · ${s.review_n} items`;
+  document.querySelector("#sum-keep").textContent = `${s.keep_label} · ${s.keep_n} items`;
+  document.querySelector("#list-delete").innerHTML = (payload.delete || []).map((i) => adviceRow(i, true)).join("") || "<p class='meta'>Nothing safe to delete.</p>";
+  document.querySelector("#list-review").innerHTML = (payload.review || []).map((i) => adviceRow(i, false)).join("") || "<p class='meta'>Nothing to review.</p>";
+  document.querySelector("#list-keep").innerHTML = (payload.keep || []).map((i) => adviceRow(i, false)).join("") || "<p class='meta'>No protected libraries in this folder.</p>";
+  document.querySelectorAll(".board .row[data-path]").forEach((row) => {
+    row.addEventListener("click", (event) => {
+      if (event.target.tagName === "INPUT") return;
+      showInspect({
+        name: row.querySelector(".nm").textContent,
+        path: row.dataset.path,
+        size: 0,
+        label: row.querySelector(".sz").textContent,
+        files: 1,
+        dir: false,
+      });
+    });
+  });
 }
 
 function fillTabs() {
@@ -124,7 +173,7 @@ function fillTabs() {
     wasteEl.innerHTML = `<strong>Reclaim ~ ${w.total_label}</strong><br>caches ${w.caches_label} · stale ${w.stale_label} · ${w.empty} empty folders`;
   }
   document.querySelector("#tab-reclaim").innerHTML = `
-    <p class="meta">Caches (node_modules, __pycache__, …) plus large files untouched for a year. DaisyDisk shows the ring. This estimates what you can actually throw away.</p>
+    <p class="meta">Caches plus large files untouched for a year. The Advice board above is the decision list — this is the raw reclaim estimate.</p>
     <p><strong>${w.total_label || "0B"}</strong> likely reclaimable</p>
     <ul class="meta">
       <li>Build/cache folders: ${w.caches_label || "0"} (${w.cache_files || 0} files)</li>
@@ -152,15 +201,20 @@ async function poll() {
     return;
   }
   scan = data.result;
+  advice = data.advice;
   viewRoot = scan.tree;
   zoomStack.length = 0;
   statusEl.textContent = `Mapped ${scan.files} files · ${scan.label} in ${scan.elapsed_ms} ms`;
+  showWorkspace();
   showInspect(scan.tree);
   paint();
   fillTabs();
+  if (advice) fillAdvice(advice);
 }
 
 async function startScan(path) {
+  if (!path) return;
+  showWorkspace();
   statusEl.textContent = "Starting scan…";
   document.querySelector("#progress").hidden = false;
   document.querySelector("#pbar").style.width = "8%";
@@ -211,21 +265,43 @@ function zoomOut() {
   }
 }
 
-document.querySelector("#path-form").addEventListener("submit", (event) => {
-  event.preventDefault();
-  startScan(pathInput.value.trim());
-});
-
-document.querySelector("#browse").addEventListener("click", async () => {
+async function pickFolder() {
   const data = await fetch("/api/pick", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then((r) => r.json());
   if (data.ok && data.path) {
     pathInput.value = data.path;
     startScan(data.path);
   }
+}
+
+document.querySelector("#path-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  startScan(pathInput.value.trim());
 });
+
+document.querySelector("#browse").addEventListener("click", pickFolder);
+document.querySelector("#welcome-browse").addEventListener("click", pickFolder);
 
 document.querySelector("#cancel").addEventListener("click", () => {
   fetch("/api/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+});
+
+document.querySelector("#scan-computer").addEventListener("click", async () => {
+  const roots = await fetch("/api/roots").then((r) => r.json());
+  const home = rootByLabel(roots.roots, "This computer") || (roots.roots || [])[0];
+  if (!home) return;
+  pathInput.value = home.path;
+  startScan(home.path);
+});
+
+document.querySelector("#scan-downloads").addEventListener("click", async () => {
+  const roots = await fetch("/api/roots").then((r) => r.json());
+  const dl = rootByLabel(roots.roots, "Downloads");
+  if (!dl) {
+    statusEl.textContent = "No Downloads folder on this computer.";
+    return;
+  }
+  pathInput.value = dl.path;
+  startScan(dl.path);
 });
 
 document.querySelector("#zoom-out").addEventListener("click", zoomOut);
@@ -289,6 +365,23 @@ document.querySelector("#why").addEventListener("click", async () => {
   const data = await fetch("/api/why?path=" + encodeURIComponent(selected.path)).then((r) => r.json());
   inspect.why.hidden = false;
   inspect.why.textContent = (data.why && data.why.why ? data.why.why.join("\n") : data.error) || "";
+});
+
+document.querySelector("#trash-checked").addEventListener("click", async () => {
+  const boxes = [...document.querySelectorAll("#list-delete input[type=checkbox]:checked")];
+  const paths = boxes.map((b) => b.dataset.path).filter(Boolean);
+  if (!paths.length) {
+    statusEl.textContent = "Nothing checked.";
+    return;
+  }
+  if (!confirm(`Move ${paths.length} item(s) to Trash?\nThis only includes the Delete column.`)) return;
+  const res = await fetch("/api/advise/purge", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paths }),
+  }).then((r) => r.json());
+  statusEl.textContent = res.ok ? `Trashed ${res.n} · skipped ${ (res.skipped || []).length }` : res.error;
+  if (res.ok) startScan(pathInput.value.trim());
 });
 
 document.querySelector("#tabs").addEventListener("click", (event) => {
@@ -401,16 +494,17 @@ document.body.addEventListener("drop", (event) => {
   }
 });
 
-loadRoots().then(async () => {
+loadRoots().then(async (roots) => {
   const st = await fetch("/api/status").then((r) => r.json());
   if (st.root) {
     pathInput.value = st.root;
     if (st.status === "done" || st.status === "running") {
+      showWorkspace();
       if (!pollTimer) pollTimer = setInterval(poll, 350);
       poll();
       return;
     }
   }
-  const first = document.querySelector("#roots button");
-  if (first && !pathInput.value) pathInput.value = first.dataset.path;
+  const home = rootByLabel(roots, "This computer");
+  if (home && !pathInput.value) pathInput.value = home.path;
 });

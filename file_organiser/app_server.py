@@ -15,6 +15,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
+from .advise import build_advice, is_protected, is_safe_delete
 from .disk import candidate_roots, prune_tree, scan_usage, text_map
 from .duplicates import choose_keeper, find_duplicates, reclaimable_bytes
 from .explain import explain_path
@@ -38,6 +39,7 @@ class AppState:
         self.rules = load_rules(None)
         self.cancel = False
         self.maps = None
+        self.advice: dict[str, Any] | None = None
 
     def allowed(self, path: Path) -> bool:
         if self.root is None:
@@ -126,7 +128,17 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
             path = parsed.path
             qs = {k: v[0] if v else "" for k, v in parse_qs(parsed.query).items()}
             if path == "/api/health":
-                self._json({"ok": True, "version": __version__, "name": "File Organiser"})
+                home = str(Path.home())
+                self._json(
+                    {
+                        "ok": True,
+                        "version": __version__,
+                        "name": "File Organiser",
+                        "product": True,
+                        "advise": True,
+                        "home": home,
+                    }
+                )
                 return
             if path == "/api/roots":
                 self._json({"ok": True, "roots": candidate_roots()})
@@ -147,7 +159,15 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                 return
             if path == "/api/scan":
                 with STATE.lock:
-                    self._json({"ok": True, "result": STATE.result, "status": STATE.status, "error": STATE.error})
+                    self._json(
+                        {
+                            "ok": True,
+                            "result": STATE.result,
+                            "status": STATE.status,
+                            "error": STATE.error,
+                            "advice": STATE.advice,
+                        }
+                    )
                 return
             if path == "/api/why":
                 target = Path(qs.get("path") or "")
@@ -155,6 +175,12 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                     self._json({"error": "missing path"}, 400)
                     return
                 self._json({"ok": True, "why": explain_path(target, STATE.rules)})
+                return
+            if path == "/api/advise":
+                with STATE.lock:
+                    if STATE.advice is None and STATE.result:
+                        STATE.advice = build_advice(STATE.result)
+                    self._json({"ok": True, "advice": STATE.advice, "status": STATE.status})
                 return
             self._static(path)
 
@@ -206,6 +232,17 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                     STATE.cancel = True
                 self._json({"ok": True})
                 return
+            if route == "/api/advise":
+                with STATE.lock:
+                    if not STATE.result:
+                        self._json({"ok": False, "error": "scan a folder first"})
+                        return
+                    STATE.advice = build_advice(STATE.result)
+                    self._json({"ok": True, "advice": STATE.advice})
+                return
+            if route == "/api/advise/purge":
+                self._json(self._purge_advice(body))
+                return
             self._json({"error": "not found"}, 404)
 
         def _start_scan(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -230,6 +267,7 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                 STATE.bytes = 0
                 STATE.cancel = False
                 STATE.maps = None
+                STATE.advice = None
 
             def job() -> None:
                 try:
@@ -244,9 +282,11 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                         progress=prog,
                         cancel=lambda: STATE.cancel,
                     )
+                    advice = build_advice(result)
                     with STATE.lock:
                         STATE.result = result
                         STATE.maps = maps
+                        STATE.advice = advice
                         STATE.status = "done"
                         STATE.visited = result["visited"]
                         STATE.bytes = result["size"]
@@ -314,6 +354,39 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
             tree = prune_tree(target, STATE.maps.dir_size, STATE.maps.dir_files, depth=0, rules=STATE.rules)
             tree["label"] = format_size(int(tree.get("size") or 0))
             return {"ok": True, "tree": tree}
+
+        def _purge_advice(self, body: dict[str, Any]) -> dict[str, Any]:
+            paths = [Path(str(p)) for p in (body.get("paths") or [])]
+            if not paths:
+                return {"ok": False, "error": "nothing selected"}
+            done = []
+            skipped = []
+            with STATE.lock:
+                advice = STATE.advice
+            for raw in paths:
+                try:
+                    target = raw.expanduser().resolve()
+                except OSError as exc:
+                    skipped.append({"path": str(raw), "error": str(exc)})
+                    continue
+                if not STATE.allowed(target):
+                    skipped.append({"path": str(target), "error": "outside the scanned folder"})
+                    continue
+                if is_protected(target) or dangerous_target(target):
+                    skipped.append({"path": str(target), "error": "protected"})
+                    continue
+                ok, why = is_safe_delete(target, advice)
+                if not ok and not body.get("force"):
+                    skipped.append({"path": str(target), "error": why})
+                    continue
+                if not target.exists():
+                    skipped.append({"path": str(target), "error": "already gone"})
+                    continue
+                try:
+                    done.append({"path": str(target), "action": _trash(target)})
+                except OSError as exc:
+                    skipped.append({"path": str(target), "error": str(exc)})
+            return {"ok": True, "n": len(done), "files": done, "skipped": skipped}
 
         def _purge_dupes(self, body: dict[str, Any]) -> dict[str, Any]:
             paths = [Path(p) for p in (body.get("paths") or [])]

@@ -1,4 +1,4 @@
-"""Build a one-folder desktop binary with PyInstaller."""
+"""Build a double-clickable desktop app with PyInstaller. No terminal required."""
 
 from __future__ import annotations
 
@@ -15,16 +15,25 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 sep = ";" if os.name == "nt" else ":"
 src = ROOT / "file_organiser" / "static"
-PyInstaller.__main__.run(
-    [
-        "--noconfirm",
-        "--clean",
-        "--name",
-        "FileOrganiser",
-        "--add-data",
-        f"{src}{sep}file_organiser/static",
-        "--console",
-        str(ROOT / "file_organiser" / "__main__.py"),
-    ]
-)
-print("Binary under dist/FileOrganiser/")
+args = [
+    "--noconfirm",
+    "--clean",
+    "--name",
+    "FileOrganiser",
+    "--windowed",
+    "--add-data",
+    f"{src}{sep}file_organiser/static",
+    "--hidden-import",
+    "send2trash",
+    "--hidden-import",
+    "file_organiser.advise",
+    "--hidden-import",
+    "file_organiser.launch",
+    "--paths",
+    str(ROOT),
+    str(ROOT / "scripts" / "run_app.py"),
+]
+if sys.platform == "darwin":
+    args.extend(["--osx-bundle-identifier", "com.sebby1770.fileorganiser"])
+PyInstaller.__main__.run(args)
+print("Double-click dist/FileOrganiser (or FileOrganiser.app on macOS).")

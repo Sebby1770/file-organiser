@@ -285,7 +285,7 @@ def test_cli_bench(tmp_path: Path):
     assert main(["bench", str(tmp_path), "--limit", "5"]) == 0
 
 
-def test_version_is_300():
+def test_version_is_400():
     from file_organiser import __version__
 
-    assert __version__ == "3.0.0"
+    assert __version__ == "4.0.0"

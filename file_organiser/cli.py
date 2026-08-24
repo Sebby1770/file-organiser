@@ -188,10 +188,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="file-organiser",
         description=(
-            "Desktop disk map and CLI to sort, dedupe, clean, and undo folders. "
-            "Run `file-organiser app` to open the local sunburst UI."
+            "Desktop app that scans a computer and tells you what to delete, "
+            "what to review, and what to keep. Run with no arguments to open the app."
         ),
-        epilog="Example: file-organiser organize ~/Downloads --dry-run",
+        epilog="Example: file-organiser    (opens the app — no command needed)",
     )
     parser.add_argument(
         "--version",
@@ -199,7 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
         version=f"%(prog)s {__version__}",
     )
 
-    subparsers = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
+    subparsers = parser.add_subparsers(dest="command", required=False, metavar="COMMAND")
 
     # --- organize ---
     sp_organize = subparsers.add_parser(
@@ -820,17 +820,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp_app = subparsers.add_parser(
         "app",
-        help="Open the desktop disk map in your browser.",
+        help="Open the desktop app (same as running with no command).",
         description=(
-            "Launch File Organiser as a local app: sunburst disk map, largest "
-            "and stale files, duplicates, organize preview, reveal and trash. "
+            "Launch File Organiser as a local app: scan this computer, then "
+            "see what is safe to delete, what to review, and what to keep. "
             "Nothing leaves this machine."
         ),
     )
     sp_app.add_argument("folder", nargs="?", type=Path, default=None, help="Optional folder to scan first.")
     sp_app.add_argument("--host", default="127.0.0.1")
-    sp_app.add_argument("--port", type=int, default=8765)
+    sp_app.add_argument("--port", type=int, default=0, help="Port (0 = first free from 8765).")
     sp_app.add_argument("--no-browser", action="store_true")
+
+    sp_advise = subparsers.add_parser(
+        "advise",
+        help="Scan a folder and say what to delete, review, or keep.",
+    )
+    _add_folder_arg(sp_advise)
 
     sp_map = subparsers.add_parser(
         "map",
@@ -888,6 +894,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     try:
+        if not args.command:
+            from .launch import run_desktop
+
+            return run_desktop()
+
         if args.command == "categories":
             cfg = args.config.expanduser().resolve() if args.config else None
             list_categories(console, cfg)
@@ -901,10 +912,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
 
         if args.command == "app":
-            from .app_server import serve_app
+            from .launch import run_desktop
 
             folder = args.folder.expanduser().resolve() if args.folder else None
-            serve_app(args.host, args.port, folder, open_browser=not args.no_browser)
+            port = int(args.port or 0)
+            if args.no_browser:
+                from .app_server import serve_app
+
+                serve_app(args.host, port or 8765, folder, open_browser=False)
+                return 0
+            return run_desktop(host=args.host, port=port, folder=folder)
+
+        if args.command == "advise":
+            from .advise import build_advice, format_advice
+            from .disk import scan_usage
+
+            folder = args.folder.expanduser().resolve()
+            result, _maps = scan_usage(folder)
+            advice = build_advice(result)
+            console.print(format_advice(advice))
             return 0
 
         if args.command == "map":
