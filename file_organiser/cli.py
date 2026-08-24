@@ -111,6 +111,16 @@ def _add_scan_opts(sp: argparse.ArgumentParser) -> None:
             "(mimetypes.guess_type) for categorization."
         ),
     )
+    sp.add_argument(
+        "--magic",
+        action="store_true",
+        help="When extension is unknown, sniff file headers (PNG, PDF, ZIP, …).",
+    )
+    sp.add_argument(
+        "--smart",
+        action="store_true",
+        help="When extension is unknown, guess from names (Screenshot, IMG_, invoice).",
+    )
 
 
 def _add_organize_opts(sp: argparse.ArgumentParser) -> None:
@@ -751,6 +761,45 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_config_arg(sp_cat)
 
+    # --- doctor ---
+    sp_doc = subparsers.add_parser(
+        "doctor",
+        help="Check a folder: permissions, rules, undo journal, empty files.",
+    )
+    _add_folder_arg(sp_doc)
+
+    # --- apply ---
+    sp_apply = subparsers.add_parser(
+        "apply",
+        help="Execute a saved preview JSON plan.",
+        description="Read a plan from `preview --json` and move those files. Dry-run unless --apply.",
+    )
+    sp_apply.add_argument("plan", type=Path, help="Path to a preview JSON plan.")
+    sp_apply.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually move files (default is dry-run).",
+    )
+    sp_apply.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show moves without applying (default).",
+    )
+
+    # --- web / studio ---
+    sp_web = subparsers.add_parser(
+        "web",
+        help="Open the local studio site (same as the GitHub Pages demo).",
+    )
+    sp_web.add_argument("--host", default="127.0.0.1")
+    sp_web.add_argument("--port", type=int, default=8765)
+    sp_web.add_argument(
+        "--folder",
+        type=Path,
+        default=None,
+        help="Optional live folder for /api/preview.",
+    )
+
     return parser
 
 
@@ -795,6 +844,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             cfg = args.config.expanduser().resolve() if args.config else None
             list_categories(console, cfg)
             return 0
+
+        if args.command == "web":
+            from .web import serve
+
+            folder = args.folder.expanduser().resolve() if args.folder else None
+            serve(args.host, args.port, folder)
+            return 0
+
+        if args.command == "apply":
+            from .organizer import apply_saved_plan
+
+            dry = not getattr(args, "apply", False)
+            apply_saved_plan(args.plan.expanduser().resolve(), console, dry_run=dry)
+            return 0
+
+        if args.command == "doctor":
+            from .doctor import doctor_folder
+
+            return doctor_folder(args.folder.expanduser().resolve(), console)
 
         if args.command == "init-config":
             try:
@@ -929,6 +997,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         exclude: List[str] = list(getattr(args, "exclude", None) or [])
         include: List[str] = list(getattr(args, "include", None) or [])
         use_mime = bool(getattr(args, "mime", False))
+        use_magic = bool(getattr(args, "magic", False))
+        use_smart = bool(getattr(args, "smart", False))
         max_depth = getattr(args, "max_depth", None)
 
         if args.command == "stats":
@@ -992,6 +1062,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 by_date=getattr(args, "by_date", False),
                 date_source=getattr(args, "date_source", "mtime"),
                 use_mime=use_mime,
+                use_magic=use_magic,
+                use_smart=use_smart,
                 max_depth=max_depth,
                 quiet=quiet,
                 as_json=getattr(args, "as_json", False),
@@ -1015,6 +1087,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 on_conflict=args.on_conflict,
                 report_path=args.report.expanduser().resolve() if args.report else None,
                 use_mime=use_mime,
+                use_magic=use_magic,
+                use_smart=use_smart,
                 max_depth=max_depth,
                 prune_empty=getattr(args, "prune_empty", False),
                 interactive=getattr(args, "interactive", False),

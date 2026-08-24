@@ -15,13 +15,16 @@ from typing import Dict, List, Optional
 
 # Default categories. Extensions must be lowercase and include the dot.
 DEFAULT_RULES: Dict[str, List[str]] = {
-    "Images": [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp", ".tiff", ".ico"],
-    "Documents": [".pdf", ".doc", ".docx", ".txt", ".rtf", ".odt", ".md", ".tex"],
+    "Images": [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp", ".tiff", ".ico", ".heic", ".heif", ".raw", ".cr2", ".nef"],
+    "Documents": [".pdf", ".doc", ".docx", ".txt", ".rtf", ".odt", ".md", ".tex", ".pages"],
+    "Ebooks": [".epub", ".mobi", ".azw", ".azw3", ".fb2"],
     "Spreadsheets": [".xls", ".xlsx", ".csv", ".ods", ".tsv"],
     "Presentations": [".ppt", ".pptx", ".odp", ".key"],
     "Videos": [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v"],
     "Audio": [".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma"],
-    "Archives": [".zip", ".tar", ".gz", ".rar", ".7z", ".bz2", ".xz"],
+    "Archives": [".zip", ".tar", ".gz", ".rar", ".7z", ".bz2", ".xz", ".iso", ".img"],
+    "Design": [".psd", ".ai", ".fig", ".sketch", ".xd", ".indd"],
+    "Models": [".obj", ".fbx", ".stl", ".glb", ".gltf", ".blend"],
     "Code": [
         ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".c", ".cpp", ".h",
         ".hpp", ".cs", ".go", ".rs", ".rb", ".php", ".swift", ".kt",
@@ -169,18 +172,33 @@ def category_for_path(
     rules: Dict[str, List[str]],
     *,
     use_mime: bool = False,
+    use_magic: bool = False,
+    use_smart: bool = False,
 ) -> str:
-    """Categorize a file by extension, optionally falling back to MIME type.
+    """Categorize a file by extension, then optional smart name / magic / MIME.
 
-    When *use_mime* is True and the extension is unknown/missing, uses
-    ``mimetypes.guess_type`` to pick a category. When the extension already
-    matches a rule, MIME is not consulted.
+    Extension always wins when it matches a rule. Smart names, magic bytes, and
+    MIME are consulted only for Other — they do not override a known type.
     """
     cat = category_for_extension(path.suffix, rules)
-    if cat != OTHER_CATEGORY or not use_mime:
+    if cat != OTHER_CATEGORY:
         return cat
-    mime, _ = mimetypes.guess_type(str(path))
-    return category_for_mime(mime)
+    if use_smart:
+        from .smart import smart_category
+
+        hinted = smart_category(path)
+        if hinted and hinted != OTHER_CATEGORY:
+            return hinted
+    if use_magic:
+        from .magic import sniff_category
+
+        sniffed = sniff_category(path)
+        if sniffed != OTHER_CATEGORY:
+            return sniffed
+    if use_mime:
+        mime, _ = mimetypes.guess_type(str(path))
+        return category_for_mime(mime)
+    return OTHER_CATEGORY
 
 
 def all_category_names(rules: Dict[str, List[str]] | None = None) -> List[str]:

@@ -4,7 +4,15 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/Sebby1770/file-organiser/actions/workflows/ci.yml/badge.svg)](https://github.com/Sebby1770/file-organiser/actions/workflows/ci.yml)
 
-**Smart CLI to sort, dedupe, clean, rename, and watch folders by type, MIME, and date.**
+**Smart CLI to sort, dedupe, clean, rename, and watch folders by type, MIME, magic bytes, and date.**
+
+Site: [https://sebby1770.github.io/file-organiser/](https://sebby1770.github.io/file-organiser/)
+
+```bash
+file-organiser preview ~/Downloads --magic --smart
+file-organiser doctor ~/Downloads
+file-organiser web --port 8765
+```
 
 Sort messy downloads into category folders (`Images/`, `Documents/`, `Videos/`, …), find content duplicates by SHA-256 (cached + parallel hashing with reclaimable-space report), bulk-rename, clean junk, compare folders, nest by year/month, prune empty dirs, multi-level undo, search by category/ext/name, and optionally watch a folder for new files — with dry-run, JSON plans, stats, and rich terminal output (respects `NO_COLOR`).
 

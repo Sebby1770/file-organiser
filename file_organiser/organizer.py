@@ -99,6 +99,8 @@ def plan_moves(
     date_source: DateSource = "mtime",
     on_conflict: ConflictStrategy = "rename",
     use_mime: bool = False,
+    use_magic: bool = False,
+    use_smart: bool = False,
     max_depth: int | None = None,
 ) -> Tuple[List[Tuple[Path, Path]], List[str]]:
     """Plan (src, dest) pairs without performing I/O beyond scanning/stat.
@@ -113,6 +115,8 @@ def plan_moves(
         include=include,
         min_size=min_size,
         use_mime=use_mime,
+        use_magic=use_magic,
+        use_smart=use_smart,
         max_depth=max_depth,
     )
     pairs: List[Tuple[Path, Path]] = []
@@ -170,6 +174,8 @@ def build_preview_plan(
     by_date: bool = False,
     date_source: DateSource = "mtime",
     use_mime: bool = False,
+    use_magic: bool = False,
+    use_smart: bool = False,
     max_depth: int | None = None,
     on_conflict: ConflictStrategy = "rename",
 ) -> Dict[str, Any]:
@@ -196,11 +202,13 @@ def build_preview_plan(
         date_source=date_source,
         on_conflict=on_conflict,
         use_mime=use_mime,
+        use_magic=use_magic,
+        use_smart=use_smart,
         max_depth=max_depth,
     )
     files_out: List[Dict[str, str]] = []
     for src, dest in pairs:
-        cat = category_for_path(src, rules, use_mime=use_mime)
+        cat = category_for_path(src, rules, use_mime=use_mime, use_magic=use_magic, use_smart=use_smart)
         files_out.append(
             {
                 "source": str(src),
@@ -227,6 +235,8 @@ def preview(
     by_date: bool = False,
     date_source: DateSource = "mtime",
     use_mime: bool = False,
+    use_magic: bool = False,
+    use_smart: bool = False,
     max_depth: int | None = None,
     quiet: bool = False,
     as_json: bool = False,
@@ -250,6 +260,8 @@ def preview(
             by_date=by_date,
             date_source=date_source,
             use_mime=use_mime,
+            use_magic=use_magic,
+            use_smart=use_smart,
             max_depth=max_depth,
         )
         # Print raw JSON to stdout (no rich styling) for machine consumers
@@ -264,6 +276,8 @@ def preview(
         include=include,
         min_size=min_size,
         use_mime=use_mime,
+        use_magic=use_magic,
+        use_smart=use_smart,
         max_depth=max_depth,
     )
     if not grouped:
@@ -506,6 +520,8 @@ def plan_moves_interactive(
     date_source: DateSource = "mtime",
     on_conflict: ConflictStrategy = "rename",
     use_mime: bool = False,
+    use_magic: bool = False,
+    use_smart: bool = False,
     max_depth: int | None = None,
 ) -> Tuple[List[Tuple[Path, Path]], List[str]]:
     """Like plan_moves, but prompt for category on Other/unknown files."""
@@ -519,6 +535,8 @@ def plan_moves_interactive(
         include=include,
         min_size=min_size,
         use_mime=use_mime,
+        use_magic=use_magic,
+        use_smart=use_smart,
         max_depth=max_depth,
     )
     category_choices = sorted(rules.keys())
@@ -602,6 +620,8 @@ def organize(
     on_conflict: ConflictStrategy = "rename",
     report_path: Optional[Path] = None,
     use_mime: bool = False,
+    use_magic: bool = False,
+    use_smart: bool = False,
     max_depth: int | None = None,
     prune_empty: bool = False,
     interactive: bool = False,
@@ -639,6 +659,8 @@ def organize(
             date_source=date_source,
             on_conflict=on_conflict,
             use_mime=use_mime,
+            use_magic=use_magic,
+            use_smart=use_smart,
             max_depth=max_depth,
         )
     else:
@@ -653,6 +675,8 @@ def organize(
             date_source=date_source,
             on_conflict=on_conflict,
             use_mime=use_mime,
+            use_magic=use_magic,
+            use_smart=use_smart,
             max_depth=max_depth,
         )
 
@@ -1168,3 +1192,36 @@ def _cleanup_empty_dirs(folder: Path) -> None:
                 pass
         except OSError:
             pass
+
+
+def apply_saved_plan(plan_path: Path, console: Console, *, dry_run: bool = True) -> int:
+    """Execute a previously saved preview JSON (source → destination pairs)."""
+    try:
+        data = json.loads(plan_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        console.print(f"[red]cannot read plan:[/red] {exc}")
+        return 0
+    files = data.get("files") or []
+    folder = Path(data.get("folder") or ".")
+    done = 0
+    records: List[MovePair] = []
+    for row in files:
+        src = Path(row.get("source") or "")
+        dest = Path(row.get("destination") or "")
+        if not src.is_file():
+            console.print(f"[yellow]missing[/yellow] {src}")
+            continue
+        if dry_run:
+            console.print(f"[cyan]plan[/cyan] {src.name} → {dest}")
+            done += 1
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dest))
+        records.append((dest, src))
+        done += 1
+    if not dry_run and records:
+        HistoryManager(folder).save(records, mode="move")
+    verb = "would move" if dry_run else "moved"
+    console.print(f"[bold]{verb} {done}[/bold] file(s)")
+    return done
+

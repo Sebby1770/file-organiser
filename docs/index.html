@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>file-organiser — a desk for a messy folder</title>
+    <meta name="description" content="Sort, dedupe, clean, and undo a Downloads folder. Preview first. Magic bytes when the extension lies. A local studio, and this site." />
+    <link rel="stylesheet" href="site.css" />
+  </head>
+  <body>
+    <header>
+      <a class="word" href="./">file-organiser</a>
+      <nav>
+        <a href="#about">About</a>
+        <a href="#does">What it does</a>
+        <a href="#help">How it helps</a>
+        <a href="#demo">Try a messy folder</a>
+        <a href="https://github.com/Sebby1770/file-organiser">GitHub</a>
+      </nav>
+    </header>
+    <main>
+      <section class="hero">
+        <p class="eyebrow">Python CLI · v1.4 · MIT</p>
+        <h1>A desk for a messy folder.</h1>
+        <p class="lede">
+          Point it at Downloads. It plans the moves, then — if you say so — it
+          sorts by type, date, magic bytes, and the names files actually wear.
+          Dry-run first. Undo after. Not a cloud vacuum. A local organiser.
+        </p>
+        <p>
+          <a class="btn" href="#demo">Try the planner</a>
+          <a class="btn ghost" href="https://github.com/Sebby1770/file-organiser">View source</a>
+        </p>
+      </section>
+      <section id="about">
+        <h2>What this site is</h2>
+        <p>
+          This is the public desk for <strong>file-organiser</strong>, a Python
+          CLI. The page in your browser is a planner: you paste a file list
+          (or use the sample mess) and it shows where each file would go.
+          Nothing on your disk moves. The real tool runs on your machine.
+        </p>
+      </section>
+      <section id="does">
+        <h2>What it does</h2>
+        <div class="grid3">
+          <article><h3>Preview</h3><p>A plan before a move. JSON if you want a machine to read it.</p></article>
+          <article><h3>Organize</h3><p>Images, documents, video, code, ebooks, design files. Date nests if you ask.</p></article>
+          <article><h3>Dedupe · clean · undo</h3><p>SHA-256 duplicates, junk cleanup, a journal you can walk back.</p></article>
+        </div>
+      </section>
+      <section id="help">
+        <h2>How it can help</h2>
+        <div class="grid3">
+          <article><h3>If Downloads is a landfill</h3><p>One preview, then one organize. Recursive if the mess went deep.</p></article>
+          <article><h3>If the extension is lying</h3><p><code>--magic</code> sniffs PNG/PDF/ZIP headers. <code>--smart</code> catches Screenshot and IMG_ names.</p></article>
+          <article><h3>If you run a desk</h3><p><code>doctor</code> checks the folder. <code>web</code> serves this site locally against a live path.</p></article>
+        </div>
+      </section>
+      <section id="demo">
+        <h2>Try a messy folder</h2>
+        <p>These names never leave the browser. Edit the list, then plan.</p>
+        <textarea id="names" rows="8">IMG_4032.jpg
+Screenshot 2026-08-01.png
+invoice-q3.pdf
+track.mp3
+notes.txt
+archive.zip
+main.py
+holiday.mkv
+resume.docx
+random.dat
+photo.heic
+book.epub
+model.stl
+Untitled</textarea>
+        <p><button class="btn" id="plan" type="button">Plan moves</button></p>
+        <table>
+          <thead><tr><th>File</th><th>Category</th><th>Destination</th></tr></thead>
+          <tbody id="out"><tr><td colspan="3">Hit plan.</td></tr></tbody>
+        </table>
+      </section>
+      <section>
+        <h2>Thirty seconds on a machine</h2>
+        <pre><code>pip install -e ".[test]"
+file-organiser preview ~/Downloads --magic --smart
+file-organiser organize ~/Downloads --dry-run
+file-organiser web --port 8765
+file-organiser doctor ~/Downloads</code></pre>
+      </section>
+    </main>
+    <footer>file-organiser · local CLI · <a href="https://github.com/Sebby1770/file-organiser">source</a></footer>
+    <script src="site.js"></script>
+  </body>
+</html>

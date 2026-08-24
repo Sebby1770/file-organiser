@@ -244,6 +244,8 @@ def scan_folder(
     include: Sequence[str] | None = None,
     min_size: int = 0,
     use_mime: bool = False,
+    use_magic: bool = False,
+    use_smart: bool = False,
     max_depth: int | None = None,
 ) -> Dict[str, List[Path]]:
     """Group scannable files by target category."""
@@ -260,6 +262,8 @@ def scan_folder(
     )
     grouped: Dict[str, List[Path]] = defaultdict(list)
     for path in files:
-        category = category_for_path(path, rules, use_mime=use_mime)
+        category = category_for_path(
+            path, rules, use_mime=use_mime, use_magic=use_magic, use_smart=use_smart
+        )
         grouped[category].append(path)
     return grouped
