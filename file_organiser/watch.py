@@ -44,11 +44,22 @@ def watch_folder(
     """
     if not _watchdog_available():
         console.print(
-            "[red]watchdog is not installed.[/red]\n"
-            "Install the optional extra:\n"
-            "  [bold]pip install file-organiser[watch][/bold]"
+            "[yellow]watchdog not installed — polling every 2s.[/yellow] "
+            "[dim]pip install file-organiser[watch] for native events.[/dim]"
         )
-        return 1
+        return _poll_watch(
+            folder,
+            console,
+            rules=rules,
+            config=config,
+            recursive=recursive,
+            copy=copy,
+            by_date=by_date,
+            min_size=min_size,
+            exclude=exclude,
+            on_conflict=on_conflict,
+            quiet=quiet,
+        )
 
     from watchdog.events import FileSystemEventHandler
     from watchdog.observers import Observer
@@ -137,3 +148,51 @@ def watch_folder(
             observer.join(timeout=5)
 
     return 0
+
+
+def _poll_watch(
+    folder: Path,
+    console: Console,
+    *,
+    rules: Optional[Dict[str, List[str]]] = None,
+    config: Optional[Path] = None,
+    recursive: bool = False,
+    copy: bool = False,
+    by_date: bool = False,
+    min_size: int = 0,
+    exclude: Sequence[str] | None = None,
+    on_conflict: str = "rename",
+    quiet: bool = False,
+    interval: float = 2.0,
+) -> int:
+    from .scanner import iter_files
+
+    if rules is None:
+        rules = load_rules(config)
+    if not quiet:
+        console.print(f"[green]Polling[/green] [cyan]{folder}[/cyan] every {interval:.0f}s. Ctrl+C to stop.")
+    seen = {p.resolve() for p in iter_files(folder, recursive=recursive, exclude=exclude, min_size=min_size)}
+    try:
+        while True:
+            time.sleep(interval)
+            current = {p.resolve() for p in iter_files(folder, recursive=recursive, exclude=exclude, min_size=min_size)}
+            if current - seen:
+                if not quiet:
+                    console.print("[dim]New files — organizing...[/dim]")
+                organize(
+                    folder,
+                    rules,  # type: ignore[arg-type]
+                    console,
+                    dry_run=False,
+                    recursive=recursive,
+                    copy=copy,
+                    by_date=by_date,
+                    min_size=min_size,
+                    exclude=list(exclude or []),
+                    on_conflict=on_conflict,  # type: ignore[arg-type]
+                    quiet=quiet,
+                )
+            seen = current
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Stopping watch...[/yellow]")
+        return 130

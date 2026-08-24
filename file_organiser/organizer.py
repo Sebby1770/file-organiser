@@ -95,6 +95,8 @@ def plan_moves(
     exclude: Sequence[str] | None = None,
     include: Sequence[str] | None = None,
     min_size: int = 0,
+    older_than: float | None = None,
+    newer_than: float | None = None,
     by_date: bool = False,
     date_source: DateSource = "mtime",
     on_conflict: ConflictStrategy = "rename",
@@ -114,6 +116,8 @@ def plan_moves(
         exclude=exclude,
         include=include,
         min_size=min_size,
+        older_than=older_than,
+        newer_than=newer_than,
         use_mime=use_mime,
         use_magic=use_magic,
         use_smart=use_smart,
@@ -171,6 +175,8 @@ def build_preview_plan(
     exclude: Sequence[str] | None = None,
     include: Sequence[str] | None = None,
     min_size: int = 0,
+    older_than: float | None = None,
+    newer_than: float | None = None,
     by_date: bool = False,
     date_source: DateSource = "mtime",
     use_mime: bool = False,
@@ -198,6 +204,8 @@ def build_preview_plan(
         exclude=exclude,
         include=include,
         min_size=min_size,
+        older_than=older_than,
+        newer_than=newer_than,
         by_date=by_date,
         date_source=date_source,
         on_conflict=on_conflict,
@@ -216,9 +224,13 @@ def build_preview_plan(
                 "category": cat,
             }
         )
+    by_cat: Dict[str, int] = {}
+    for row in files_out:
+        by_cat[row["category"]] = by_cat.get(row["category"], 0) + 1
     return {
         "folder": str(folder),
         "count": len(files_out),
+        "by_category": by_cat,
         "files": files_out,
     }
 
@@ -238,6 +250,8 @@ def preview(
     use_magic: bool = False,
     use_smart: bool = False,
     max_depth: int | None = None,
+    older_than: float | None = None,
+    newer_than: float | None = None,
     quiet: bool = False,
     as_json: bool = False,
 ) -> None:
@@ -263,6 +277,8 @@ def preview(
             use_magic=use_magic,
             use_smart=use_smart,
             max_depth=max_depth,
+            older_than=older_than,
+            newer_than=newer_than,
         )
         # Print raw JSON to stdout (no rich styling) for machine consumers
         print(json.dumps(plan, indent=2))
@@ -627,6 +643,9 @@ def organize(
     interactive: bool = False,
     quiet: bool = False,
     verbose: bool = False,
+    force: bool = False,
+    older_than: float | None = None,
+    newer_than: float | None = None,
 ) -> int:
     """Move, copy, or symlink files into category subfolders.
 
@@ -639,6 +658,13 @@ def organize(
     """
     if not folder.exists() or not folder.is_dir():
         console.print(f"[red]Error:[/red] '{folder}' is not a valid directory.")
+        return 0
+
+    from .safety import dangerous_target
+
+    danger = dangerous_target(folder)
+    if danger and not force:
+        console.print(f"[red]{danger}[/red]  pass --i-mean-it to override")
         return 0
 
     if symlink and copy:
@@ -662,6 +688,8 @@ def organize(
             use_magic=use_magic,
             use_smart=use_smart,
             max_depth=max_depth,
+            older_than=older_than,
+            newer_than=newer_than,
         )
     else:
         pairs, skips = plan_moves(
@@ -678,6 +706,8 @@ def organize(
             use_magic=use_magic,
             use_smart=use_smart,
             max_depth=max_depth,
+            older_than=older_than,
+            newer_than=newer_than,
         )
 
     if not pairs and not skips:

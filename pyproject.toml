@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "file-organiser"
-version = "1.4.0"
+version = "1.5.0"
 description = "Smart CLI to sort, dedupe, clean, rename, and watch folders — magic bytes, smart names, and a local studio site"
 readme = "README.md"
 license = { text = "MIT" }

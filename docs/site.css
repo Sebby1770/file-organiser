@@ -47,6 +47,15 @@ h2 { font-weight: 400; font-size: 28px; }
 }
 .btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--ink); }
 .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.pipe { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.pipe li { border: 1px solid var(--line); padding: 14px; }
+.pipe span { color: var(--gold); font-size: 12px; letter-spacing: 0.12em; }
+.pipe strong { display: block; margin: 6px 0; }
+.pipe p { margin: 0; color: var(--muted); font-size: 14px; }
+.walk { padding-left: 18px; color: var(--muted); }
+.packs { display: flex; flex-wrap: wrap; gap: 8px; }
+.check { display: flex; gap: 8px; align-items: center; margin: 12px 0; }
+.stats { font-family: ui-monospace, Menlo, monospace; font-size: 13px; color: var(--muted); }
 article { border: 1px solid var(--line); padding: 16px; }
 textarea, pre, table { width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
 textarea { padding: 12px; border: 1px solid var(--line); background: #fff; }
@@ -56,6 +65,6 @@ pre { background: #fff; border: 1px solid var(--line); padding: 16px; overflow: 
 footer { padding: 24px 28px; color: var(--muted); font-size: 13px; }
 footer a { color: inherit; }
 @media (max-width: 800px) {
-  .grid3 { grid-template-columns: 1fr; }
+  .grid3, .pipe { grid-template-columns: 1fr; }
   header { flex-direction: column; }
 }

@@ -22,7 +22,7 @@ from rich.table import Table
 
 from .scanner import HASH_CACHE_FILENAME, format_size, iter_files
 
-KeepPolicy = Literal["oldest", "newest"]
+KeepPolicy = Literal["oldest", "newest", "largest"]
 
 # Stats for tests / callers that want to inspect cache effectiveness
 CacheStats = Dict[str, int]
@@ -284,6 +284,14 @@ def choose_keeper(paths: List[Path], keep: KeepPolicy = "oldest") -> Path:
     """Pick which file to keep from a duplicate group."""
     if keep == "newest":
         return max(paths, key=_mtime)
+    if keep == "largest":
+        def _size(path: Path) -> int:
+            try:
+                return path.stat().st_size
+            except OSError:
+                return 0
+
+        return max(paths, key=_size)
     return min(paths, key=_mtime)
 
 

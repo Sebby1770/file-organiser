@@ -26,7 +26,7 @@ from .organizer import (
 )
 from .rename import rename_files
 from .rules import OTHER_CATEGORY, discover_config, init_config, load_rules
-from .scanner import parse_size
+from .scanner import parse_duration, parse_size
 
 
 def _add_folder_arg(sp: argparse.ArgumentParser) -> None:
@@ -121,6 +121,20 @@ def _add_scan_opts(sp: argparse.ArgumentParser) -> None:
         action="store_true",
         help="When extension is unknown, guess from names (Screenshot, IMG_, invoice).",
     )
+    sp.add_argument(
+        "--older-than",
+        type=str,
+        default=None,
+        metavar="AGE",
+        help="Only files older than AGE (e.g. 7d, 12h, 30m).",
+    )
+    sp.add_argument(
+        "--newer-than",
+        type=str,
+        default=None,
+        metavar="AGE",
+        help="Only files newer than AGE (e.g. 24h).",
+    )
 
 
 def _add_organize_opts(sp: argparse.ArgumentParser) -> None:
@@ -204,6 +218,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Show what would happen without moving any files.",
+    )
+    sp_organize.add_argument(
+        "--i-mean-it",
+        action="store_true",
+        help="Allow organizing $HOME or a drive root (refused by default).",
     )
     sp_organize.add_argument(
         "--interactive",
@@ -729,7 +748,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp_dup.add_argument(
         "--keep",
-        choices=("oldest", "newest"),
+        choices=("oldest", "newest", "largest"),
         default="oldest",
         help="Which file to keep when deleting dupes (default: oldest).",
     )
@@ -800,6 +819,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional live folder for /api/preview.",
     )
 
+    sp_why = subparsers.add_parser(
+        "why",
+        help="Explain how a single file would be categorized.",
+    )
+    sp_why.add_argument("path", type=Path, help="File to explain.")
+    _add_config_arg(sp_why)
+    sp_why.add_argument("--mime", action="store_true", default=True)
+    sp_why.add_argument("--magic", action="store_true", default=True)
+    sp_why.add_argument("--smart", action="store_true", default=True)
+
     return parser
 
 
@@ -863,6 +892,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             from .doctor import doctor_folder
 
             return doctor_folder(args.folder.expanduser().resolve(), console)
+
+        if args.command == "why":
+            from .explain import explain_path
+
+            info = explain_path(
+                args.path.expanduser().resolve(),
+                _resolve_rules(args.config.expanduser().resolve() if args.config else None),
+                use_mime=getattr(args, "mime", True),
+                use_magic=getattr(args, "magic", True),
+                use_smart=getattr(args, "smart", True),
+            )
+            for line in info["why"]:
+                console.print(line)
+            return 0
 
         if args.command == "init-config":
             try:
@@ -994,6 +1037,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         rules = _resolve_rules(config_arg)
         min_size = _resolve_min_size(getattr(args, "min_size", None), console)
+        older_than = None
+        newer_than = None
+        try:
+            if getattr(args, "older_than", None):
+                older_than = parse_duration(args.older_than)
+            if getattr(args, "newer_than", None):
+                newer_than = parse_duration(args.newer_than)
+        except ValueError as exc:
+            console.print(f"[red]Error:[/red] {exc}")
+            return 2
         exclude: List[str] = list(getattr(args, "exclude", None) or [])
         include: List[str] = list(getattr(args, "include", None) or [])
         use_mime = bool(getattr(args, "mime", False))
@@ -1065,6 +1118,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 use_magic=use_magic,
                 use_smart=use_smart,
                 max_depth=max_depth,
+                older_than=older_than,
+                newer_than=newer_than,
                 quiet=quiet,
                 as_json=getattr(args, "as_json", False),
             )
@@ -1094,6 +1149,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 interactive=getattr(args, "interactive", False),
                 quiet=quiet,
                 verbose=verbose,
+                force=getattr(args, "i_mean_it", False),
+                older_than=older_than,
+                newer_than=newer_than,
             )
             return 0
 

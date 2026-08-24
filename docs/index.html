@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>file-organiser — a desk for a messy folder</title>
-    <meta name="description" content="Sort, dedupe, clean, and undo a Downloads folder. Preview first. Magic bytes when the extension lies. A local studio, and this site." />
+    <title>file-organiser — preview first, then sort</title>
+    <meta name="description" content="A local Python desk for messy folders. Magic bytes, smart names, undo, doctor. This site is a planner — nothing on your disk moves." />
     <link rel="stylesheet" href="site.css" />
   </head>
   <body>
@@ -14,82 +14,92 @@
         <a href="#about">About</a>
         <a href="#does">What it does</a>
         <a href="#help">How it helps</a>
-        <a href="#demo">Try a messy folder</a>
+        <a href="#demo">Planner</a>
+        <a href="#safety">Safety</a>
         <a href="https://github.com/Sebby1770/file-organiser">GitHub</a>
       </nav>
     </header>
     <main>
       <section class="hero">
-        <p class="eyebrow">Python CLI · v1.4 · MIT</p>
-        <h1>A desk for a messy folder.</h1>
+        <p class="eyebrow">Python CLI · v1.5 · MIT · local</p>
+        <h1>Preview first.<br />Then sort the landfill.</h1>
         <p class="lede">
-          Point it at Downloads. It plans the moves, then — if you say so — it
-          sorts by type, date, magic bytes, and the names files actually wear.
-          Dry-run first. Undo after. Not a cloud vacuum. A local organiser.
+          A Downloads folder is a crime scene. file-organiser writes a plan —
+          by type, date, magic bytes, and the names files actually wear — then
+          moves only if you say so. Undo is a journal, not a prayer. This page
+          is the planner. The CLI is the desk.
         </p>
         <p>
-          <a class="btn" href="#demo">Try the planner</a>
-          <a class="btn ghost" href="https://github.com/Sebby1770/file-organiser">View source</a>
+          <a class="btn" href="#demo">Open the planner</a>
+          <a class="btn ghost" href="https://github.com/Sebby1770/file-organiser">Source</a>
         </p>
       </section>
+      <ol class="pipe">
+        <li><span>01</span><strong>Scan</strong><p>Extensions, headers, Screenshot/IMG_/invoice names.</p></li>
+        <li><span>02</span><strong>Plan</strong><p>JSON you can read, save, and <code>apply</code> later.</p></li>
+        <li><span>03</span><strong>Move</strong><p>Or copy. Or symlink. Date nests if you ask.</p></li>
+        <li><span>04</span><strong>Undo</strong><p>A stack in the folder. Walk it back.</p></li>
+      </ol>
       <section id="about">
         <h2>What this site is</h2>
         <p>
-          This is the public desk for <strong>file-organiser</strong>, a Python
-          CLI. The page in your browser is a planner: you paste a file list
-          (or use the sample mess) and it shows where each file would go.
-          Nothing on your disk moves. The real tool runs on your machine.
+          Names you type here never leave the browser. The same rules the CLI
+          uses decide a category. On your machine, <code>file-organiser web --folder ~/Downloads</code>
+          serves this page plus a live preview of the real folder.
         </p>
       </section>
       <section id="does">
         <h2>What it does</h2>
         <div class="grid3">
-          <article><h3>Preview</h3><p>A plan before a move. JSON if you want a machine to read it.</p></article>
-          <article><h3>Organize</h3><p>Images, documents, video, code, ebooks, design files. Date nests if you ask.</p></article>
-          <article><h3>Dedupe · clean · undo</h3><p>SHA-256 duplicates, junk cleanup, a journal you can walk back.</p></article>
+          <article><h3>Organize</h3><p>Images, documents, ebooks, video, code, design, 3D. <code>--magic --smart</code> when the extension lies.</p></article>
+          <article><h3>Dedupe</h3><p>SHA-256 groups. Keep oldest, newest, or largest. Reclaimable bytes printed every time.</p></article>
+          <article><h3>Doctor · why</h3><p>Permissions, journal, empty files. <code>why FILE</code> prints the chain: extension, name, bytes, MIME, final.</p></article>
         </div>
       </section>
       <section id="help">
         <h2>How it can help</h2>
         <div class="grid3">
-          <article><h3>If Downloads is a landfill</h3><p>One preview, then one organize. Recursive if the mess went deep.</p></article>
-          <article><h3>If the extension is lying</h3><p><code>--magic</code> sniffs PNG/PDF/ZIP headers. <code>--smart</code> catches Screenshot and IMG_ names.</p></article>
-          <article><h3>If you run a desk</h3><p><code>doctor</code> checks the folder. <code>web</code> serves this site locally against a live path.</p></article>
+          <article><h3>Landfill Downloads</h3><p><code>preview</code> then <code>organize --dry-run</code>. Recursive if the mess went deep. Age filters: <code>--older-than 30d</code>.</p></article>
+          <article><h3>Liars</h3><p>A PNG named <code>notes.bin</code> is still an image. Invoice in the filename is still a document.</p></article>
+          <article><h3>Watch</h3><p>Native events if watchdog is installed. Otherwise it polls. New files get a category without you opening Finder.</p></article>
         </div>
       </section>
       <section id="demo">
-        <h2>Try a messy folder</h2>
-        <p>These names never leave the browser. Edit the list, then plan.</p>
-        <textarea id="names" rows="8">IMG_4032.jpg
-Screenshot 2026-08-01.png
-invoice-q3.pdf
-track.mp3
-notes.txt
-archive.zip
-main.py
-holiday.mkv
-resume.docx
-random.dat
-photo.heic
-book.epub
-model.stl
-Untitled</textarea>
+        <h2>Planner</h2>
+        <p>Paste names, or load a sample mess. Toggle date nests. Nothing is uploaded.</p>
+        <p class="packs">
+          <button type="button" class="btn ghost" data-pack="downloads">Sample Downloads</button>
+          <button type="button" class="btn ghost" data-pack="camera">Camera roll</button>
+          <button type="button" class="btn ghost" data-pack="desk">Student desk</button>
+        </p>
+        <label class="check"><input type="checkbox" id="by-date" /> nest Category/YYYY/MM</label>
+        <textarea id="names" rows="9"></textarea>
         <p><button class="btn" id="plan" type="button">Plan moves</button></p>
+        <p class="stats" id="stats"></p>
         <table>
           <thead><tr><th>File</th><th>Category</th><th>Destination</th></tr></thead>
-          <tbody id="out"><tr><td colspan="3">Hit plan.</td></tr></tbody>
+          <tbody id="out"><tr><td colspan="3">Load a pack or paste names.</td></tr></tbody>
         </table>
       </section>
+      <section id="safety">
+        <h2>House rules</h2>
+        <ol class="walk">
+          <li>It will not organize <code>$HOME</code> or <code>/</code> unless you pass <code>--i-mean-it</code>.</li>
+          <li>Clean and rename are dry-run until <code>--apply</code>.</li>
+          <li>Undo lives in the folder as a journal, last ten snapshots.</li>
+          <li>A feed of names on this site is a plan, not a move.</li>
+        </ol>
+      </section>
       <section>
-        <h2>Thirty seconds on a machine</h2>
+        <h2>On a machine</h2>
         <pre><code>pip install -e ".[test]"
-file-organiser preview ~/Downloads --magic --smart
-file-organiser organize ~/Downloads --dry-run
-file-organiser web --port 8765
-file-organiser doctor ~/Downloads</code></pre>
+file-organiser preview ~/Downloads --magic --smart --older-than 7d
+file-organiser why ~/Downloads/mystery.bin
+file-organiser doctor ~/Downloads
+file-organiser web --folder ~/Downloads --port 8765</code></pre>
       </section>
     </main>
-    <footer>file-organiser · local CLI · <a href="https://github.com/Sebby1770/file-organiser">source</a></footer>
+    <footer>file-organiser 1.5 · local CLI · <a href="https://github.com/Sebby1770/file-organiser">source</a></footer>
     <script src="site.js"></script>
   </body>
 </html>

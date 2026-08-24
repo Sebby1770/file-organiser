@@ -4,6 +4,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Set
@@ -25,6 +26,18 @@ _SIZE_MULTIPLIERS = {
     "G": 1024**3,
     "T": 1024**4,
 }
+
+
+_DURATION_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([smhdw]?)\s*$", re.I)
+_DURATION_UNITS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+
+
+def parse_duration(value: str) -> float:
+    """Parse ``30s``, ``15m``, ``2h``, ``7d``, ``1w`` into seconds."""
+    match = _DURATION_RE.match(str(value or ""))
+    if not match:
+        raise ValueError(f"Invalid duration: {value!r} (examples: 30s, 15m, 2h, 7d)")
+    return float(match.group(1)) * _DURATION_UNITS[match.group(2).lower()]
 
 
 def parse_size(value: str) -> int:
@@ -133,6 +146,8 @@ def iter_files(
     exclude: Sequence[str] | None = None,
     include: Sequence[str] | None = None,
     min_size: int = 0,
+    older_than: float | None = None,
+    newer_than: float | None = None,
     category_names: Iterable[str] | None = None,
     skip_category_folders: bool = True,
     max_depth: int | None = None,
@@ -169,12 +184,17 @@ def iter_files(
             return
         if not matches_include(path, folder, include):
             return
-        if min_size > 0:
-            try:
-                if path.stat().st_size < min_size:
-                    return
-            except OSError:
-                return
+        try:
+            st = path.stat()
+        except OSError:
+            return
+        if min_size > 0 and st.st_size < min_size:
+            return
+        now = time.time()
+        if older_than is not None and (now - st.st_mtime) < older_than:
+            return
+        if newer_than is not None and (now - st.st_mtime) > newer_than:
+            return
         if skip_category_folders and categories and _is_under_category(path, folder, categories):
             return
         if max_depth is not None and recursive:
@@ -243,6 +263,8 @@ def scan_folder(
     exclude: Sequence[str] | None = None,
     include: Sequence[str] | None = None,
     min_size: int = 0,
+    older_than: float | None = None,
+    newer_than: float | None = None,
     use_mime: bool = False,
     use_magic: bool = False,
     use_smart: bool = False,
@@ -256,6 +278,8 @@ def scan_folder(
         exclude=exclude,
         include=include,
         min_size=min_size,
+        older_than=older_than,
+        newer_than=newer_than,
         category_names=category_names,
         skip_category_folders=True,
         max_depth=max_depth,

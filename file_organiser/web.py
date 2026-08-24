@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import __version__
 from .organizer import build_preview_plan
-from .rules import load_rules
+from .rules import category_for_path, load_rules
 
 DOCS = Path(__file__).resolve().parents[1] / "docs"
 
@@ -29,6 +29,12 @@ def serve(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = None)
             parsed = urlparse(self.path)
             if parsed.path == "/api/health":
                 self._json({"ok": True, "version": __version__, "folder": str(target) if target else None})
+                return
+            if parsed.path == "/api/rules":
+                self._json({"ok": True, "rules": rules})
+                return
+            if parsed.path == "/api/classify":
+                self._json({"error": "POST a JSON list of names"}, 400)
                 return
             if parsed.path == "/api/preview":
                 if target is None:
@@ -59,6 +65,30 @@ def serve(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = None)
                 return
             ctype = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
             self._bytes(path.read_bytes(), ctype)
+
+        def do_POST(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            raw = self.rfile.read(min(length, 1_000_000)) if length else b"{}"
+            try:
+                body = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._json({"error": "invalid json"}, 400)
+                return
+            if parsed.path != "/api/classify":
+                self._json({"error": "not found"}, 404)
+                return
+            names = body.get("names") or []
+            by_date = bool(body.get("by_date"))
+            files = []
+            counts: dict[str, int] = {}
+            for name in names[:400]:
+                path = Path(str(name))
+                cat = category_for_path(path, rules, use_smart=True)
+                dest = f"{cat}/YYYY/MM/{path.name}" if by_date else f"{cat}/{path.name}"
+                files.append({"name": path.name, "category": cat, "destination": dest})
+                counts[cat] = counts.get(cat, 0) + 1
+            self._json({"ok": True, "count": len(files), "by_category": counts, "files": files})
 
         def _json(self, payload: object, status: int = 200) -> None:
             body = json.dumps(payload, default=str).encode("utf-8")
