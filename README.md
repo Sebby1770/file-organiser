@@ -111,3 +111,51 @@ Bug reports and early-access requests are public GitHub issues. Never paste file
 ## Licence
 
 [MIT](LICENSE) © Sebastian Forbes.
+
+## Safe transaction workflow
+
+Organising is now a validated transaction. A normal `organize` command is a
+dry-run unless you explicitly pass `--apply`:
+
+```bash
+file-organiser profiles
+file-organiser organize ~/Downloads --profile downloads --dry-run
+file-organiser organize ~/Downloads --profile downloads --apply
+file-organiser undo ~/Downloads --dry-run
+file-organiser undo ~/Downloads
+```
+
+For a reviewable, repeatable workflow, create a plan first. Plans use SHA-256
+fingerprints by default, are written atomically, and are checked again while a
+per-folder lock is held. Any failure rolls back moves already made in that
+batch; overwritten destinations are kept as private backups until undo:
+
+```bash
+file-organiser plan ~/Downloads --profile downloads -o /tmp/downloads-plan.json
+file-organiser apply /tmp/downloads-plan.json          # validate only
+file-organiser apply /tmp/downloads-plan.json --apply  # commit
+```
+
+Use `--fast-fingerprint` with `plan` only when scan speed matters more than
+content-level drift detection; it records size and modification time instead.
+JSON and Markdown reports include the transaction id and whether the result was
+planned, committed, or rolled back; CSV keeps stable move columns. Paths, categories, symlink components, and stale
+source/destination fingerprints are revalidated before anything is changed.
+
+Built-in profiles are `standard`, `downloads`, and `minimal`. A custom rules
+file can expose named profiles with this shape:
+
+```json
+{
+  "version": 1,
+  "default_profile": "work",
+  "profiles": {
+    "work": {
+      "description": "Project files",
+      "rules": {"Documents": [".pdf"], "Code": [".py", ".ts"]}
+    }
+  }
+}
+```
+
+Site and source: [GitHub](https://github.com/Sebby1770/file-organiser). MIT.

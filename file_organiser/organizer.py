@@ -2,35 +2,35 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 from rich.console import Console
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    TimeElapsedColumn,
-)
 from rich.table import Table
 from rich.tree import Tree as RichTree
 
 from .history import HISTORY_FILENAME, HistoryManager
 from .report import write_report
 from .rules import category_for_path
+from .safety import (
+    SafetyError,
+    resolved_root,
+    validate_category_name,
+    validate_destination_path,
+)
 from .scanner import format_size, iter_files, matches_include, scan_folder
+from .transaction import (
+    PlanError,
+    build_plan,
+    execute_plan,
+    read_plan,
+    undo_latest,
+)
 
 ConflictStrategy = Literal["rename", "skip", "overwrite"]
 DateSource = Literal["mtime", "ctime"]
-
-MovePair = Tuple[Path, Path]  # (current/dest, original/src)
-
 
 def unique_destination(dest: Path) -> Path:
     """If dest already exists, append ' (1)', ' (2)', ... until unique."""
@@ -75,7 +75,7 @@ def target_directory(
     date_source: DateSource = "mtime",
 ) -> Path:
     """Compute the destination directory for a file."""
-    base = folder / category
+    base = folder / validate_category_name(category)
     if not by_date:
         return base
     try:
@@ -109,6 +109,10 @@ def plan_moves(
 
     Returns (pairs, skip_messages).
     """
+    try:
+        root = resolved_root(folder)
+    except SafetyError as exc:
+        return [], [str(exc)]
     grouped = scan_folder(
         folder,
         rules,
@@ -130,10 +134,16 @@ def plan_moves(
 
     for category, files in grouped.items():
         for src in files:
-            dest_dir = target_directory(
-                folder, category, src, by_date=by_date, date_source=date_source
-            )
-            dest = dest_dir / src.name
+            try:
+                dest_dir = target_directory(
+                    root, category, src, by_date=by_date, date_source=date_source
+                )
+                dest = validate_destination_path(
+                    root, dest_dir / src.name, allow_existing=True
+                )
+            except SafetyError as exc:
+                skips.append(f"unsafe destination for {src.name}: {exc}")
+                continue
             # Avoid same-path no-ops
             try:
                 if src.resolve() == dest.resolve():
@@ -184,20 +194,12 @@ def build_preview_plan(
     use_smart: bool = False,
     max_depth: int | None = None,
     on_conflict: ConflictStrategy = "rename",
+    mode: str = "move",
+    profile: str | None = None,
+    content_hash: bool = False,
 ) -> Dict[str, Any]:
-    """Build a machine-readable organize plan.
-
-    Schema::
-
-        {
-          "folder": "...",
-          "count": N,
-          "files": [
-            {"source": "...", "destination": "...", "category": "..."}
-          ]
-        }
-    """
-    pairs, _skips = plan_moves(
+    """Build a versioned, fingerprinted, machine-readable organize plan."""
+    pairs, skips = plan_moves(
         folder,
         rules,
         recursive=recursive,
@@ -214,25 +216,19 @@ def build_preview_plan(
         use_smart=use_smart,
         max_depth=max_depth,
     )
-    files_out: List[Dict[str, str]] = []
+    rows: List[Tuple[Path, Path, str]] = []
     for src, dest in pairs:
         cat = category_for_path(src, rules, use_mime=use_mime, use_magic=use_magic, use_smart=use_smart)
-        files_out.append(
-            {
-                "source": str(src),
-                "destination": str(dest),
-                "category": cat,
-            }
-        )
-    by_cat: Dict[str, int] = {}
-    for row in files_out:
-        by_cat[row["category"]] = by_cat.get(row["category"], 0) + 1
-    return {
-        "folder": str(folder),
-        "count": len(files_out),
-        "by_category": by_cat,
-        "files": files_out,
-    }
+        rows.append((src, dest, cat))
+    return build_plan(
+        folder,
+        rows,
+        mode=mode,
+        on_conflict=on_conflict,
+        skipped=skips,
+        profile=profile,
+        content_hash=content_hash,
+    )
 
 
 def preview(
@@ -254,6 +250,9 @@ def preview(
     newer_than: float | None = None,
     quiet: bool = False,
     as_json: bool = False,
+    on_conflict: ConflictStrategy = "rename",
+    profile: str | None = None,
+    content_hash: bool | None = None,
 ) -> None:
     """Show what would be organized, without moving anything.
 
@@ -279,6 +278,11 @@ def preview(
             max_depth=max_depth,
             older_than=older_than,
             newer_than=newer_than,
+            on_conflict=on_conflict,
+            profile=profile,
+            # A JSON plan is potentially long-lived, so strong verification is
+            # the safe default. In-memory/table previews stay metadata-only.
+            content_hash=as_json if content_hash is None else content_hash,
         )
         # Print raw JSON to stdout (no rich styling) for machine consumers
         print(json.dumps(plan, indent=2))
@@ -585,10 +589,16 @@ def plan_moves_interactive(
     planned: set[Path] = set()
 
     for src, category in assignments:
-        dest_dir = target_directory(
-            folder, category, src, by_date=by_date, date_source=date_source
-        )
-        dest = dest_dir / src.name
+        try:
+            dest_dir = target_directory(
+                folder, category, src, by_date=by_date, date_source=date_source
+            )
+            dest = validate_destination_path(
+                folder, dest_dir / src.name, allow_existing=True
+            )
+        except SafetyError as exc:
+            skips.append(f"unsafe destination for {src.name}: {exc}")
+            continue
         try:
             if src.resolve() == dest.resolve():
                 continue
@@ -647,7 +657,7 @@ def organize(
     older_than: float | None = None,
     newer_than: float | None = None,
 ) -> int:
-    """Move, copy, or symlink files into category subfolders.
+    """Transactionally move, copy, or symlink files into category folders.
 
     *symlink* creates a symlink at the destination pointing at the source
     (sources stay in place). Mutually preferred over copy when both set.
@@ -658,13 +668,6 @@ def organize(
     """
     if not folder.exists() or not folder.is_dir():
         console.print(f"[red]Error:[/red] '{folder}' is not a valid directory.")
-        return 0
-
-    from .safety import dangerous_target
-
-    danger = dangerous_target(folder)
-    if danger and not force:
-        console.print(f"[red]{danger}[/red]  pass --i-mean-it to override")
         return 0
 
     if symlink and copy:
@@ -714,13 +717,41 @@ def organize(
         console.print(f"[yellow]Nothing to organize in[/yellow] {folder}")
         return 0
 
-    total = len(pairs)
     if symlink:
         mode = "symlink"
     elif copy:
         mode = "copy"
     else:
         mode = "move"
+
+    rows: List[Tuple[Path, Path, str]] = []
+    try:
+        root = resolved_root(folder)
+        for src, dest in pairs:
+            try:
+                relative = dest.relative_to(root)
+                category = relative.parts[0]
+            except (ValueError, IndexError):
+                category = category_for_path(
+                    src,
+                    rules,
+                    use_mime=use_mime,
+                    use_magic=use_magic,
+                    use_smart=use_smart,
+                )
+            rows.append((src, dest, category))
+        plan = build_plan(
+            root,
+            rows,
+            mode=mode,
+            on_conflict=on_conflict,
+            skipped=skips,
+        )
+    except (PlanError, SafetyError, OSError, ValueError) as exc:
+        console.print(f"[red]Safety check failed:[/red] {exc}")
+        return 0
+
+    total = len(rows)
     mode_tag = "[yellow](dry-run)[/yellow] " if dry_run else ""
     if not quiet:
         console.print(
@@ -728,98 +759,54 @@ def organize(
             f"([dim]{mode}[/dim])"
         )
 
-    history_moves: List[MovePair] = []
-    report_moves: List[MovePair] = []
-    errors: List[str] = list(skips) if verbose else []
-    success = 0
-
-    progress_ctx = Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        console=console,
-        transient=False,
-        disable=quiet,
-    )
-
-    with progress_ctx as progress:
-        task = progress.add_task("Sorting files...", total=max(total, 1))
-
+    if verbose:
+        action = "would " + mode if dry_run else mode
         for src, dest in pairs:
             try:
-                if dry_run:
-                    rel_dest = dest
-                    try:
-                        rel_dest = dest.relative_to(folder)
-                    except ValueError:
-                        pass
-                    if verbose or not quiet:
-                        if symlink:
-                            action = "would symlink"
-                        elif copy:
-                            action = "would copy"
-                        else:
-                            action = "would move"
-                        progress.console.log(f"[dim]{action}[/dim] {src.name} -> {rel_dest}")
-                    report_moves.append((dest, src))
-                    success += 1
-                else:
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    if on_conflict == "overwrite" and dest.exists():
-                        try:
-                            dest.unlink()
-                        except OSError:
-                            pass
-                    if symlink:
-                        # Absolute target so the link works from category folders
-                        target = src.resolve()
-                        os.symlink(target, dest)
-                    elif copy:
-                        shutil.copy2(str(src), str(dest))
-                    else:
-                        shutil.move(str(src), str(dest))
-                    history_moves.append((dest, src))
-                    report_moves.append((dest, src))
-                    success += 1
-                    if verbose:
-                        if symlink:
-                            action = "symlinked"
-                        elif copy:
-                            action = "copied"
-                        else:
-                            action = "moved"
-                        progress.console.log(f"[green]{action}[/green] {src.name} -> {dest}")
-            except (OSError, shutil.Error) as e:
-                errors.append(f"Failed to {mode} {src.name}: {e}")
-            finally:
-                progress.advance(task, 1)
+                shown = dest.relative_to(root)
+            except ValueError:
+                shown = dest
+            console.print(f"  [dim]{action}[/dim] {src.name} → {shown}")
 
-    if not dry_run and history_moves:
-        HistoryManager(folder).save(history_moves, mode=mode)
-        if not quiet:
-            console.print(
-                f"[green]✓[/green] Organized {success} file(s). "
-                f"Run [bold]undo[/bold] to revert."
-            )
-    elif dry_run and not quiet:
-        console.print("[yellow]Dry run complete.[/yellow] No files were modified.")
+    result = execute_plan(plan, dry_run=dry_run, force=force)
+    success = result.completed
+    if result.ok and not dry_run and not quiet:
+        console.print(
+            f"[green]✓[/green] Organized {success} file(s) atomically "
+            f"([dim]{result.transaction_id[:8]}[/dim]). "
+            f"Run [bold]undo[/bold] to revert."
+        )
+    elif result.ok and dry_run and not quiet:
+        console.print(
+            "[yellow]Dry run complete.[/yellow] "
+            "All paths and fingerprints validated; no files were modified."
+        )
 
     # Prune empty dirs after move-mode organize (not copy/symlink, not dry-run)
-    if prune_empty and not dry_run and mode == "move" and history_moves:
+    if prune_empty and result.ok and not dry_run and mode == "move" and success:
         n = prune_empty_dirs(folder, console if not quiet else None, quiet=quiet)
         if quiet and n and console:
             pass  # stay quiet
 
     if report_path is not None:
-        write_report(report_path, report_moves, mode=mode, dry_run=dry_run)
+        report_moves = [(dest, src) for src, dest in pairs] if result.ok else []
+        write_report(
+            report_path,
+            report_moves,
+            mode=mode,
+            dry_run=dry_run,
+            transaction_id=result.transaction_id or None,
+            errors=result.errors,
+        )
         if not quiet:
             console.print(f"[blue]Report written to[/blue] {report_path}")
 
-    if errors and not quiet:
-        console.print(f"[red]Encountered {len(errors)} issue(s):[/red]")
-        for err in errors:
+    issues = list(skips) if verbose else []
+    issues.extend(result.errors)
+    if issues and not quiet:
+        label = "Transaction rolled back" if result.rolled_back else "Safety check failed"
+        console.print(f"[red]{label} ({len(issues)} issue(s)):[/red]")
+        for err in issues:
             console.print(f"  [red]•[/red] {err}")
 
     return success
@@ -831,8 +818,10 @@ def undo(
     *,
     quiet: bool = False,
     list_only: bool = False,
+    dry_run: bool = False,
+    force: bool = False,
 ) -> int:
-    """Revert the most recent organize operation in this folder.
+    """Transactionally revert the most recent organize operation.
 
     For copy/symlink mode, removes the copies/links (does not delete originals).
     For move/rename mode, moves files back to original locations.
@@ -864,7 +853,7 @@ def undo(
         )
         return 0
 
-    snapshot = history.pop()
+    snapshot = history.peek()
     if not snapshot:
         console.print(f"[yellow]No undo history found in[/yellow] {folder}")
         return 0
@@ -876,55 +865,30 @@ def undo(
             f"Reverting [bold]{len(moves)}[/bold] file(s) in [cyan]{folder}[/cyan] "
             f"([dim]{mode}[/dim])"
         )
-    errors: List[str] = []
-    restored = 0
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        console=console,
-        disable=quiet,
-    ) as progress:
-        task = progress.add_task("Restoring files...", total=max(len(moves), 1))
-        for current, original in moves:
-            try:
-                # Symlinks: is_file/exists may follow; check is_symlink too
-                if not current.exists() and not current.is_symlink():
-                    errors.append(f"Missing (already moved?): {current}")
-                    continue
-                if mode in ("copy", "symlink"):
-                    # Undo copy/symlink: remove the organized entry; original stays
-                    current.unlink()
-                    restored += 1
-                else:
-                    # move or rename: put file back at original path
-                    original.parent.mkdir(parents=True, exist_ok=True)
-                    final = unique_destination(original)
-                    shutil.move(str(current), str(final))
-                    restored += 1
-            except (OSError, shutil.Error) as e:
-                errors.append(f"Failed to restore {current.name}: {e}")
-            finally:
-                progress.advance(task, 1)
+    result = undo_latest(folder, dry_run=dry_run, force=force)
+    restored = result.completed
 
     # Clean up empty directories under the folder (category / date nests)
-    _cleanup_empty_dirs(folder)
+    if result.ok and not dry_run:
+        _cleanup_empty_dirs(folder)
 
     remaining = history.load_stack()
     if not quiet:
-        action = "Removed" if mode in ("copy", "symlink") else "Restored"  # move/rename
+        action = "Would remove" if dry_run and mode in ("copy", "symlink") else (
+            "Would restore" if dry_run else (
+                "Removed" if mode in ("copy", "symlink") else "Restored"
+            )
+        )
         extra = (
             f" ({len(remaining)} snapshot(s) remaining)"
             if remaining
             else ""
         )
         console.print(f"[green]✓[/green] {action} {restored} file(s).{extra}")
-    if errors and not quiet:
-        console.print(f"[red]Encountered {len(errors)} error(s):[/red]")
-        for err in errors:
+    if result.errors and not quiet:
+        label = "Undo rolled back" if result.rolled_back else "Undo refused"
+        console.print(f"[red]{label} ({len(result.errors)} error(s)):[/red]")
+        for err in result.errors:
             console.print(f"  [red]•[/red] {err}")
     return restored
 
@@ -1224,34 +1188,27 @@ def _cleanup_empty_dirs(folder: Path) -> None:
             pass
 
 
-def apply_saved_plan(plan_path: Path, console: Console, *, dry_run: bool = True) -> int:
-    """Execute a previously saved preview JSON (source → destination pairs)."""
+def apply_saved_plan(
+    plan_path: Path,
+    console: Console,
+    *,
+    dry_run: bool = True,
+    force: bool = False,
+) -> int:
+    """Validate and atomically execute a saved organize plan."""
     try:
-        data = json.loads(plan_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        console.print(f"[red]cannot read plan:[/red] {exc}")
-        return 0
-    files = data.get("files") or []
-    folder = Path(data.get("folder") or ".")
-    done = 0
-    records: List[MovePair] = []
-    for row in files:
-        src = Path(row.get("source") or "")
-        dest = Path(row.get("destination") or "")
-        if not src.is_file():
-            console.print(f"[yellow]missing[/yellow] {src}")
-            continue
-        if dry_run:
-            console.print(f"[cyan]plan[/cyan] {src.name} → {dest}")
-            done += 1
-            continue
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(src), str(dest))
-        records.append((dest, src))
-        done += 1
-    if not dry_run and records:
-        HistoryManager(folder).save(records, mode="move")
-    verb = "would move" if dry_run else "moved"
-    console.print(f"[bold]{verb} {done}[/bold] file(s)")
-    return done
-
+        data = read_plan(plan_path)
+    except PlanError as exc:
+        console.print(f"[red]Cannot read plan:[/red] {exc}")
+        return -1
+    result = execute_plan(data, dry_run=dry_run, force=force)
+    if result.ok:
+        verb = "validated" if dry_run else "applied"
+        suffix = " — no files changed" if dry_run else f" — transaction {result.transaction_id[:8]}"
+        console.print(f"[green]✓[/green] [bold]{verb} {result.completed}[/bold] file(s){suffix}")
+    else:
+        label = "Plan rolled back" if result.rolled_back else "Plan refused"
+        console.print(f"[red]{label}:[/red]")
+        for error in result.errors:
+            console.print(f"  [red]•[/red] {error}")
+    return result.completed if result.ok else -1

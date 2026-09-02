@@ -15,6 +15,7 @@ from .console_util import make_console
 from .diff import diff_folders
 from .duplicates import default_workers, find_and_report_duplicates
 from .organizer import (
+    build_preview_plan,
     find_files,
     organize,
     preview,
@@ -25,8 +26,15 @@ from .organizer import (
     undo,
 )
 from .rename import rename_files
-from .rules import OTHER_CATEGORY, discover_config, init_config, load_rules
+from .rules import (
+    OTHER_CATEGORY,
+    available_profiles,
+    discover_config,
+    init_config,
+    load_rules,
+)
 from .scanner import parse_duration, parse_size
+from .transaction import write_plan
 
 
 def _add_folder_arg(sp: argparse.ArgumentParser) -> None:
@@ -47,6 +55,16 @@ def _add_config_arg(sp: argparse.ArgumentParser) -> None:
             "Path to a custom JSON rules config file. "
             "If omitted, looks for ./.file-organiser.json then "
             "~/.config/file-organiser/rules.json."
+        ),
+    )
+    sp.add_argument(
+        "--profile",
+        type=str,
+        default=None,
+        metavar="NAME",
+        help=(
+            "Named rules profile (built-ins: standard, downloads, minimal; "
+            "or a profile from --config)."
         ),
     )
 
@@ -213,11 +231,20 @@ def build_parser() -> argparse.ArgumentParser:
     _add_folder_arg(sp_organize)
     _add_config_arg(sp_organize)
     _add_organize_opts(sp_organize)
-    sp_organize.add_argument(
+    organize_commit = sp_organize.add_mutually_exclusive_group()
+    organize_commit.add_argument(
+        "--apply",
+        action="store_false",
+        dest="dry_run",
+        help="Commit the transaction (default is a validated dry-run).",
+    )
+    organize_commit.add_argument(
         "--dry-run",
         action="store_true",
-        help="Show what would happen without moving any files.",
+        dest="dry_run",
+        help="Validate and show the transaction without changing files (default).",
     )
+    sp_organize.set_defaults(dry_run=True)
     sp_organize.add_argument(
         "--i-mean-it",
         action="store_true",
@@ -248,6 +275,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show date-nested destinations (category/YYYY/MM).",
     )
     sp_preview.add_argument(
+        "--on-conflict",
+        choices=("rename", "skip", "overwrite"),
+        default="rename",
+        help="Destination policy represented in JSON plans (default: rename).",
+    )
+    sp_preview.add_argument(
         "--date-source",
         choices=("mtime", "ctime"),
         default="mtime",
@@ -260,6 +293,55 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print a machine-readable organize plan as JSON to stdout.",
     )
     _add_verbosity(sp_preview)
+
+    # --- plan ---
+    sp_plan = subparsers.add_parser(
+        "plan",
+        help="Create a fingerprinted JSON transaction plan.",
+        description=(
+            "Scan a folder and save a versioned, SHA-256 verified plan. "
+            "Nothing is changed; inspect it, then run `file-organiser apply PLAN`."
+        ),
+    )
+    _add_folder_arg(sp_plan)
+    _add_config_arg(sp_plan)
+    _add_scan_opts(sp_plan)
+    plan_mode = sp_plan.add_mutually_exclusive_group()
+    plan_mode.add_argument("--copy", action="store_true", help="Plan copies instead of moves.")
+    plan_mode.add_argument(
+        "--symlink", action="store_true", help="Plan symlinks instead of moves."
+    )
+    sp_plan.add_argument(
+        "--by-date",
+        action="store_true",
+        help="Nest destinations under category/YYYY/MM.",
+    )
+    sp_plan.add_argument(
+        "--date-source",
+        choices=("mtime", "ctime"),
+        default="mtime",
+        help="Timestamp to use with --by-date (default: mtime).",
+    )
+    sp_plan.add_argument(
+        "--on-conflict",
+        choices=("rename", "skip", "overwrite"),
+        default="rename",
+        help="Destination conflict policy captured by the plan.",
+    )
+    sp_plan.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        required=True,
+        metavar="PATH",
+        help="JSON file to create atomically.",
+    )
+    sp_plan.add_argument(
+        "--fast-fingerprint",
+        action="store_true",
+        help="Use size+mtime instead of SHA-256 (faster, weaker drift detection).",
+    )
+    _add_verbosity(sp_plan)
 
     # --- find ---
     sp_find = subparsers.add_parser(
@@ -413,6 +495,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         dest="list_history",
         help="List undo history snapshots without reverting.",
+    )
+    sp_undo.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate the latest undo transaction without changing files.",
+    )
+    sp_undo.add_argument(
+        "--i-mean-it",
+        action="store_true",
+        help="Allow undo at $HOME or a drive root (refused by default).",
     )
     _add_verbosity(sp_undo)
 
@@ -779,6 +871,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_config_arg(sp_cat)
 
+    sp_profiles = subparsers.add_parser(
+        "profiles",
+        help="List built-in or configured organization profiles.",
+        description="Show profile names accepted by --profile.",
+    )
+    sp_profiles.add_argument(
+        "-c",
+        "--config",
+        type=Path,
+        default=None,
+        help="Optional profile-aware JSON config to inspect.",
+    )
+
     # --- doctor ---
     sp_doc = subparsers.add_parser(
         "doctor",
@@ -797,6 +902,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--apply",
         action="store_true",
         help="Actually move files (default is dry-run).",
+    )
+    sp_apply.add_argument(
+        "--i-mean-it",
+        action="store_true",
+        help="Allow applying a plan rooted at $HOME or a drive root.",
     )
     sp_apply.add_argument(
         "--dry-run",
@@ -867,16 +977,23 @@ def _resolve_min_size(value: Optional[str], console) -> int:
         raise SystemExit(2) from e
 
 
-def _resolve_rules(config_arg: Optional[Path]) -> dict:
+def _resolve_rules(config_arg: Optional[Path], profile: str | None = None) -> dict:
     """Load rules using explicit config or discovery."""
     path = discover_config(config_arg)
-    return load_rules(path)
+    return load_rules(path, profile=profile)
 
 
-def list_categories(console, config: Optional[Path] = None) -> None:
+def list_categories(
+    console,
+    config: Optional[Path] = None,
+    profile: str | None = None,
+) -> None:
     path = discover_config(config)
-    rules = load_rules(path)
-    table = Table(title="File categories", header_style="bold cyan")
+    rules = load_rules(path, profile=profile)
+    selected = profile or "configured default" if path else profile or "standard"
+    table = Table(
+        title=f"File categories — {selected}", header_style="bold cyan"
+    )
     table.add_column("Category", style="green")
     table.add_column("Extensions", style="white")
     for name in sorted(rules.keys()):
@@ -886,6 +1003,18 @@ def list_categories(console, config: Optional[Path] = None) -> None:
     console.print(table)
     src = str(path) if path else "built-in defaults"
     console.print(f"[dim]{len(rules)} categories (+ {OTHER_CATEGORY}) — config: {src}[/dim]")
+
+
+def list_profiles(console, config: Optional[Path] = None) -> None:
+    path = discover_config(config)
+    profiles = available_profiles(path)
+    table = Table(title="Organization profiles", header_style="bold cyan")
+    table.add_column("Name", style="green")
+    table.add_column("Description", style="white")
+    table.add_column("Source", style="dim")
+    for profile in profiles:
+        table.add_row(profile["name"], profile["description"], profile["source"])
+    console.print(table)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -901,7 +1030,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         if args.command == "categories":
             cfg = args.config.expanduser().resolve() if args.config else None
-            list_categories(console, cfg)
+            list_categories(console, cfg, profile=getattr(args, "profile", None))
+            return 0
+
+        if args.command == "profiles":
+            cfg = args.config.expanduser().resolve() if args.config else None
+            list_profiles(console, cfg)
             return 0
 
         if args.command == "web":
@@ -943,8 +1077,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             from .organizer import apply_saved_plan
 
             dry = not getattr(args, "apply", False)
-            apply_saved_plan(args.plan.expanduser().resolve(), console, dry_run=dry)
-            return 0
+            completed = apply_saved_plan(
+                args.plan.expanduser().resolve(),
+                console,
+                dry_run=dry,
+                force=getattr(args, "i_mean_it", False),
+            )
+            # Zero operations is a valid, successful no-op plan. Negative is
+            # reserved for unreadable, unsafe, stale, or rolled-back plans.
+            return 0 if completed >= 0 else 1
 
         if args.command == "doctor":
             from .doctor import doctor_folder
@@ -956,7 +1097,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
             info = explain_path(
                 args.path.expanduser().resolve(),
-                _resolve_rules(args.config.expanduser().resolve() if args.config else None),
+                _resolve_rules(
+                    args.config.expanduser().resolve() if args.config else None,
+                    profile=getattr(args, "profile", None),
+                ),
                 use_mime=getattr(args, "mime", True),
                 use_magic=getattr(args, "magic", True),
                 use_smart=getattr(args, "smart", True),
@@ -999,13 +1143,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         verbose = getattr(args, "verbose", False)
 
         if args.command == "undo":
-            undo(
+            restored = undo(
                 folder,
                 console,
                 quiet=quiet,
                 list_only=getattr(args, "list_history", False),
+                dry_run=getattr(args, "dry_run", False),
+                force=getattr(args, "i_mean_it", False),
             )
-            return 0
+            if getattr(args, "list_history", False):
+                return 0
+            return 0 if restored > 0 else 1
 
         if args.command == "prune":
             prune_empty_dirs(
@@ -1093,7 +1241,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         config_arg = (
             args.config.expanduser().resolve() if getattr(args, "config", None) else None
         )
-        rules = _resolve_rules(config_arg)
+        profile = getattr(args, "profile", None)
+        rules = _resolve_rules(config_arg, profile=profile)
         min_size = _resolve_min_size(getattr(args, "min_size", None), console)
         older_than = None
         newer_than = None
@@ -1111,6 +1260,49 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         use_magic = bool(getattr(args, "magic", False))
         use_smart = bool(getattr(args, "smart", False))
         max_depth = getattr(args, "max_depth", None)
+
+        if args.command == "plan":
+            output = args.output.expanduser().resolve()
+            # Do not accidentally include an older plan file in a refreshed
+            # plan when the output lives inside the selected folder.
+            try:
+                output.relative_to(folder)
+            except ValueError:
+                pass
+            else:
+                exclude.append(output.name)
+            mode = "symlink" if args.symlink else ("copy" if args.copy else "move")
+            plan = build_preview_plan(
+                folder,
+                rules,
+                recursive=args.recursive,
+                exclude=exclude or None,
+                include=include or None,
+                min_size=min_size,
+                older_than=older_than,
+                newer_than=newer_than,
+                by_date=args.by_date,
+                date_source=args.date_source,
+                use_mime=use_mime,
+                use_magic=use_magic,
+                use_smart=use_smart,
+                max_depth=max_depth,
+                on_conflict=args.on_conflict,
+                mode=mode,
+                profile=profile,
+                content_hash=not args.fast_fingerprint,
+            )
+            write_plan(output, plan)
+            verification = plan.get("verification", "unknown")
+            console.print(
+                f"[green]✓[/green] Wrote [bold]{plan['count']}[/bold] operation(s), "
+                f"[bold]{plan.get('total_bytes', 0):,}[/bold] bytes to [cyan]{output}[/cyan]"
+            )
+            console.print(
+                f"[dim]Plan {str(plan['id'])[:8]} · {mode} · {verification}. "
+                f"Validate with `file-organiser apply {output}`; commit with `--apply`.[/dim]"
+            )
+            return 0
 
         if args.command == "stats":
             show_stats(
@@ -1180,6 +1372,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 newer_than=newer_than,
                 quiet=quiet,
                 as_json=getattr(args, "as_json", False),
+                on_conflict=getattr(args, "on_conflict", "rename"),
+                profile=profile,
             )
             return 0
 
