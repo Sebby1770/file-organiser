@@ -2,6 +2,7 @@ const pathInput = document.querySelector("#path");
 const statusEl = document.querySelector("#status");
 const canvas = document.querySelector("#sun");
 const tip = document.querySelector("#tip");
+const sessionToken = document.querySelector('meta[name="file-organiser-session"]').content;
 const inspect = {
   name: document.querySelector("#i-name"),
   size: document.querySelector("#i-size"),
@@ -19,6 +20,21 @@ let view = "sun";
 let viewRoot = null;
 const zoomStack = [];
 
+function apiFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  headers.set("X-File-Organiser-Token", sessionToken);
+  return fetch(url, { ...options, headers, credentials: "same-origin" });
+}
+
+function esc(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
 function fmt(n) {
   if (n >= 1e12) return (n / 1e12).toFixed(2) + " TB";
   if (n >= 1e9) return (n / 1e9).toFixed(2) + " GB";
@@ -33,10 +49,10 @@ function showWorkspace() {
 }
 
 async function loadRoots() {
-  const data = await fetch("/api/roots").then((r) => r.json());
+  const data = await apiFetch("/api/roots").then((r) => r.json());
   const rail = document.querySelector("#roots");
   rail.innerHTML = (data.roots || [])
-    .map((r) => `<button type="button" data-path="${r.path}">${r.label}</button>`)
+    .map((r) => `<button type="button" data-path="${esc(r.path)}">${esc(r.label)}</button>`)
     .join("");
   rail.querySelectorAll("button").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -57,6 +73,7 @@ function showInspect(node) {
   inspect.size.textContent = node.label || fmt(node.size || 0);
   inspect.meta.textContent = `${node.dir ? "folder" : "file"} · ${node.files || 0} files\n${node.path || ""}`;
   inspect.actions.hidden = !node.path;
+  document.querySelector("#trash").hidden = !node.safeDelete;
   inspect.why.hidden = true;
 }
 
@@ -82,11 +99,11 @@ function paint() {
 
 function table(rows, cols) {
   if (!rows.length) return "<p class='meta'>Nothing here.</p>";
-  const head = "<tr>" + cols.map((c) => `<th>${c.label}</th>`).join("") + "</tr>";
+  const head = "<tr>" + cols.map((c) => `<th>${esc(c.label)}</th>`).join("") + "</tr>";
   const body = rows
     .map((row) => {
-      const tds = cols.map((c) => `<td>${c.render(row)}</td>`).join("");
-      return `<tr data-path="${row.path || ""}">${tds}</tr>`;
+      const tds = cols.map((c) => `<td>${c.html ? c.render(row) : esc(c.render(row))}</td>`).join("");
+      return `<tr data-path="${esc(row.path || "")}">${tds}</tr>`;
     })
     .join("");
   return `<table><thead>${head}</thead><tbody>${body}</tbody></table>`;
@@ -94,13 +111,13 @@ function table(rows, cols) {
 
 function adviceRow(item, checkable) {
   const box = checkable
-    ? `<input type="checkbox" checked data-path="${item.path.replace(/"/g, "&quot;")}" />`
+    ? `<input type="checkbox" checked data-path="${esc(item.path)}" />`
     : "";
-  return `<div class="row" data-path="${item.path.replace(/"/g, "&quot;")}">
+  return `<div class="row" data-path="${esc(item.path)}">
     ${box}
-    <span class="sz">${item.label}</span>
-    <span class="nm">${item.name}</span>
-    <p class="why-line">${item.reason}</p>
+    <span class="sz">${esc(item.label)}</span>
+    <span class="nm">${esc(item.name)}</span>
+    <p class="why-line">${esc(item.reason)}</p>
   </div>`;
 }
 
@@ -125,6 +142,7 @@ function fillAdvice(payload) {
         label: row.querySelector(".sz").textContent,
         files: 1,
         dir: false,
+        safeDelete: row.closest(".delete") !== null,
       });
     });
   });
@@ -145,7 +163,7 @@ function fillTabs() {
   const maxCat = Math.max(1, ...(scan.categories || []).map((c) => c.size));
   document.querySelector("#tab-cats").innerHTML = table(scan.categories || [], [
     { label: "Category", render: (r) => r.category },
-    { label: "Size", render: (r) => `<span class="bar" style="width:${Math.max(8, (r.size / maxCat) * 180)}px"></span>${r.label}` },
+    { label: "Size", html: true, render: (r) => `<span class="bar" style="width:${Math.max(8, (Number(r.size) / maxCat) * 180)}px"></span>${esc(r.label)}` },
     { label: "Files", render: (r) => r.files },
   ]);
   document.querySelectorAll("#tab-largest tr[data-path], #tab-stale tr[data-path]").forEach((tr) => {
@@ -170,20 +188,20 @@ function fillTabs() {
   }
   if (w.total) {
     wasteEl.hidden = false;
-    wasteEl.innerHTML = `<strong>Reclaim ~ ${w.total_label}</strong><br>caches ${w.caches_label} · stale ${w.stale_label} · ${w.empty} empty folders`;
+    wasteEl.innerHTML = `<strong>Reclaim ~ ${esc(w.total_label)}</strong><br>caches ${esc(w.caches_label)} · stale ${esc(w.stale_label)} · ${esc(w.empty)} empty folders`;
   }
   document.querySelector("#tab-reclaim").innerHTML = `
     <p class="meta">Caches plus large files untouched for a year. The Advice board above is the decision list — this is the raw reclaim estimate.</p>
-    <p><strong>${w.total_label || "0B"}</strong> likely reclaimable</p>
+    <p><strong>${esc(w.total_label || "0B")}</strong> likely reclaimable</p>
     <ul class="meta">
-      <li>Build/cache folders: ${w.caches_label || "0"} (${w.cache_files || 0} files)</li>
-      <li>Stale large files: ${w.stale_label || "0"}</li>
-      <li>Empty folders: ${w.empty || 0}</li>
+      <li>Build/cache folders: ${esc(w.caches_label || "0")} (${esc(w.cache_files || 0)} files)</li>
+      <li>Stale large files: ${esc(w.stale_label || "0")}</li>
+      <li>Empty folders: ${esc(w.empty || 0)}</li>
     </ul>`;
 }
 
 async function poll() {
-  const st = await fetch("/api/status").then((r) => r.json());
+  const st = await apiFetch("/api/status").then((r) => r.json());
   const bar = document.querySelector("#progress");
   const inner = document.querySelector("#pbar");
   if (st.status === "running") {
@@ -195,7 +213,7 @@ async function poll() {
   bar.hidden = true;
   clearInterval(pollTimer);
   pollTimer = null;
-  const data = await fetch("/api/scan").then((r) => r.json());
+  const data = await apiFetch("/api/scan").then((r) => r.json());
   if (data.error) {
     statusEl.textContent = data.error;
     return;
@@ -218,7 +236,7 @@ async function startScan(path) {
   statusEl.textContent = "Starting scan…";
   document.querySelector("#progress").hidden = false;
   document.querySelector("#pbar").style.width = "8%";
-  const res = await fetch("/api/scan", {
+  const res = await apiFetch("/api/scan", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path }),
@@ -242,7 +260,7 @@ async function zoomInto(node) {
     paint();
     return;
   }
-  const data = await fetch("/api/zoom", {
+  const data = await apiFetch("/api/zoom", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path: node.path }),
@@ -266,7 +284,7 @@ function zoomOut() {
 }
 
 async function pickFolder() {
-  const data = await fetch("/api/pick", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then((r) => r.json());
+  const data = await apiFetch("/api/pick", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then((r) => r.json());
   if (data.ok && data.path) {
     pathInput.value = data.path;
     startScan(data.path);
@@ -282,19 +300,19 @@ document.querySelector("#browse").addEventListener("click", pickFolder);
 document.querySelector("#welcome-browse").addEventListener("click", pickFolder);
 
 document.querySelector("#cancel").addEventListener("click", () => {
-  fetch("/api/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  apiFetch("/api/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
 });
 
 document.querySelector("#scan-computer").addEventListener("click", async () => {
-  const roots = await fetch("/api/roots").then((r) => r.json());
-  const home = rootByLabel(roots.roots, "This computer") || (roots.roots || [])[0];
+  const roots = await apiFetch("/api/roots").then((r) => r.json());
+  const home = rootByLabel(roots.roots, "Home folder") || (roots.roots || [])[0];
   if (!home) return;
   pathInput.value = home.path;
   startScan(home.path);
 });
 
 document.querySelector("#scan-downloads").addEventListener("click", async () => {
-  const roots = await fetch("/api/roots").then((r) => r.json());
+  const roots = await apiFetch("/api/roots").then((r) => r.json());
   const dl = rootByLabel(roots.roots, "Downloads");
   if (!dl) {
     statusEl.textContent = "No Downloads folder on this computer.";
@@ -342,7 +360,7 @@ canvas.addEventListener("mouseleave", () => {
 
 document.querySelector("#reveal").addEventListener("click", () => {
   if (!selected || !selected.path) return;
-  fetch("/api/reveal", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: selected.path }) });
+  apiFetch("/api/reveal", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: selected.path }) });
 });
 document.querySelector("#copy").addEventListener("click", async () => {
   if (!selected || !selected.path) return;
@@ -352,7 +370,7 @@ document.querySelector("#copy").addEventListener("click", async () => {
 document.querySelector("#trash").addEventListener("click", async () => {
   if (!selected || !selected.path) return;
   if (!confirm(`Move to trash?\n${selected.path}`)) return;
-  const data = await fetch("/api/trash", {
+  const data = await apiFetch("/api/trash", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path: selected.path }),
@@ -362,7 +380,7 @@ document.querySelector("#trash").addEventListener("click", async () => {
 });
 document.querySelector("#why").addEventListener("click", async () => {
   if (!selected || !selected.path) return;
-  const data = await fetch("/api/why?path=" + encodeURIComponent(selected.path)).then((r) => r.json());
+  const data = await apiFetch("/api/why?path=" + encodeURIComponent(selected.path)).then((r) => r.json());
   inspect.why.hidden = false;
   inspect.why.textContent = (data.why && data.why.why ? data.why.why.join("\n") : data.error) || "";
 });
@@ -375,7 +393,7 @@ document.querySelector("#trash-checked").addEventListener("click", async () => {
     return;
   }
   if (!confirm(`Move ${paths.length} item(s) to Trash?\nThis only includes the Delete column.`)) return;
-  const res = await fetch("/api/advise/purge", {
+  const res = await apiFetch("/api/advise/purge", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ paths }),
@@ -394,7 +412,7 @@ document.querySelector("#tabs").addEventListener("click", (event) => {
 document.querySelector('[data-tab="dupes"]').addEventListener("click", async () => {
   if (!scan) return;
   document.querySelector("#tab-dupes").innerHTML = "<p class='meta'>Hashing…</p>";
-  const data = await fetch("/api/dupes", {
+  const data = await apiFetch("/api/dupes", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path: scan.root, min_size: 256000 }),
@@ -405,23 +423,23 @@ document.querySelector('[data-tab="dupes"]').addEventListener("click", async () 
   }
   const groups = data.groups || [];
   const html =
-    `<p class="meta">Reclaimable ${data.reclaim_label} across ${data.extra_files} extra copies. Trash extras keeps the largest.</p>` +
+    `<p class="meta">Potentially reclaimable ${esc(data.reclaim_label)} across ${esc(data.extra_files)} extra copies. Every file is re-hashed before Trash.</p>` +
     groups
       .map(
         (g) =>
-          `<div class="dupe"><p><strong>${g.count}×</strong> keep ${g.keep.split("/").pop()}</p>
-           <button class="btn danger" data-keep="${g.keep}" data-paths='${JSON.stringify(g.files.map((f) => f.path))}'>Trash extras</button>
-           <p class="meta">${g.files.map((f) => f.name + " " + f.label).join(" · ")}</p></div>`
+          `<div class="dupe"><p><strong>${esc(g.count)}×</strong> keep ${esc(g.keep.split("/").pop())}</p>
+           <button class="btn danger" data-group="${esc(g.group)}" data-keep="${esc(g.keep)}">Trash safe extras</button>
+           <p class="meta">${g.files.map((f) => esc(f.name + " " + f.label)).join(" · ")}</p></div>`
       )
       .join("");
   document.querySelector("#tab-dupes").innerHTML = html || "<p class='meta'>No duplicates over 256 KB.</p>";
-  document.querySelectorAll("#tab-dupes [data-keep]").forEach((btn) => {
+  document.querySelectorAll("#tab-dupes [data-group]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      const paths = JSON.parse(btn.dataset.paths);
-      const res = await fetch("/api/dupes/purge", {
+      if (!confirm("Move duplicate extras to Trash only if they are also on the Delete list? Files are re-checked first.")) return;
+      const res = await apiFetch("/api/dupes/purge", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ keep: btn.dataset.keep, paths }),
+        body: JSON.stringify({ keep: btn.dataset.keep, group: btn.dataset.group }),
       }).then((r) => r.json());
       statusEl.textContent = res.ok ? `Trashed ${res.n} extras` : res.error;
       if (res.ok) startScan(pathInput.value.trim());
@@ -432,7 +450,7 @@ document.querySelector('[data-tab="dupes"]').addEventListener("click", async () 
 document.querySelector('[data-tab="plan"]').addEventListener("click", async () => {
   if (!scan) return;
   document.querySelector("#tab-plan").innerHTML = "<p class='meta'>Planning…</p>";
-  const data = await fetch("/api/organize", {
+  const data = await apiFetch("/api/organize", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path: scan.root, recursive: false, magic: true, smart: true }),
@@ -443,7 +461,7 @@ document.querySelector('[data-tab="plan"]').addEventListener("click", async () =
   }
   const files = (data.plan && data.plan.files) || [];
   document.querySelector("#tab-plan").innerHTML =
-    `<p class="meta">${data.plan.count} files would move into category folders.</p>
+    `<p class="meta">${esc(data.plan.count)} files would move into category folders.</p>
      <button class="btn" id="apply-plan" type="button">Apply organize</button>` +
     table(
       files.slice(0, 40).map((f) => ({
@@ -460,7 +478,7 @@ document.querySelector('[data-tab="plan"]').addEventListener("click", async () =
   if (apply) {
     apply.addEventListener("click", async () => {
       if (!confirm("Move files into category folders? Undo is available from the CLI.")) return;
-      const res = await fetch("/api/organize", {
+      const res = await apiFetch("/api/organize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: scan.root, recursive: false, apply: true }),
@@ -470,6 +488,32 @@ document.querySelector('[data-tab="plan"]').addEventListener("click", async () =
     });
   }
 });
+
+async function exportReport(format) {
+  if (!scan) {
+    statusEl.textContent = "Scan a folder before exporting a report.";
+    return;
+  }
+  const response = await apiFetch(`/api/report?format=${encodeURIComponent(format)}`);
+  if (!response.ok) {
+    const data = await response.json();
+    statusEl.textContent = data.error || "Could not export the report.";
+    return;
+  }
+  const blob = await response.blob();
+  const href = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = href;
+  link.download = `file-organiser-scan.${format}`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(href);
+  statusEl.textContent = `Exported a local ${format.toUpperCase()} report. Paths in it may be sensitive.`;
+}
+
+document.querySelector("#export-json").addEventListener("click", () => exportReport("json"));
+document.querySelector("#export-csv").addEventListener("click", () => exportReport("csv"));
 
 document.addEventListener("keydown", (event) => {
   if (event.target && ["INPUT", "TEXTAREA"].includes(event.target.tagName)) return;
@@ -495,7 +539,7 @@ document.body.addEventListener("drop", (event) => {
 });
 
 loadRoots().then(async (roots) => {
-  const st = await fetch("/api/status").then((r) => r.json());
+  const st = await apiFetch("/api/status").then((r) => r.json());
   if (st.root) {
     pathInput.value = st.root;
     if (st.status === "done" || st.status === "running") {
@@ -505,6 +549,6 @@ loadRoots().then(async (roots) => {
       return;
     }
   }
-  const home = rootByLabel(roots, "This computer");
+  const home = rootByLabel(roots, "Home folder");
   if (home && !pathInput.value) pathInput.value = home.path;
 });

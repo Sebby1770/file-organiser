@@ -1,0 +1,12 @@
+{
+  "name": "File Organiser",
+  "short_name": "File Organiser",
+  "description": "Private cleanup advice for a folder you choose.",
+  "start_url": "./",
+  "display": "browser",
+  "background_color": "#0a0c10",
+  "theme_color": "#0a0c10",
+  "icons": [
+    { "src": "./icon.jpg", "sizes": "1024x1024", "type": "image/jpeg" }
+  ]
+}

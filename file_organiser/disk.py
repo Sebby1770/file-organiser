@@ -61,7 +61,7 @@ def candidate_roots() -> list[dict[str, str]]:
     """Folders a person actually wants to open on this machine."""
     home = Path.home()
     names = [
-        ("This computer", home),
+        ("Home folder", home),
         ("Downloads", home / "Downloads"),
         ("Documents", home / "Documents"),
         ("Desktop", home / "Desktop"),

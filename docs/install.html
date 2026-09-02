@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Install File Organiser — source preview and release status</title>
+    <meta name="description" content="Check live File Organiser release availability, understand unsigned build warnings, verify checksums, or run the current source preview with Python." />
+    <link rel="canonical" href="https://sebby1770.github.io/file-organiser/install.html" />
+    <meta property="og:type" content="article" /><meta property="og:site_name" content="File Organiser" /><meta property="og:title" content="Install the File Organiser preview" /><meta property="og:description" content="Live release detection, unsigned-build caveats, and source instructions without a broken download promise." /><meta property="og:url" content="https://sebby1770.github.io/file-organiser/install.html" /><meta property="og:image" content="https://sebby1770.github.io/file-organiser/og.png" /><meta property="og:image:alt" content="File Organiser — Know what to delete. Keep what matters." />
+    <meta name="twitter:card" content="summary_large_image" /><meta name="twitter:title" content="Install the File Organiser preview" /><meta name="twitter:description" content="Use a verified release asset when available, or run the source preview." /><meta name="twitter:image" content="https://sebby1770.github.io/file-organiser/og.png" /><meta name="twitter:image:alt" content="File Organiser — Know what to delete. Keep what matters." />
+    <link rel="icon" href="./icon.jpg" /><link rel="stylesheet" href="./site.css" /><script src="./analytics-config.js"></script><script src="./site.js" defer></script>
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://sebby1770.github.io/file-organiser/"},{"@type":"ListItem","position":2,"name":"Install","item":"https://sebby1770.github.io/file-organiser/install.html"}]}</script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a><header class="site-header"><a class="brand" href="./"><img src="./icon.jpg" alt="" width="32" height="32" /><span>File Organiser</span></a><nav aria-label="Primary navigation"><a href="./">Product</a><a href="./safety.html">Safety</a><a href="./guide.html">Guide</a><a href="./pricing.html">Pricing</a><a href="./about.html">About</a></nav><a class="nav-cta release-aware" href="./install.html" aria-current="page">Get the preview</a></header>
+    <main id="main">
+      <header class="page-hero"><div class="section-shell"><nav class="breadcrumbs" aria-label="Breadcrumb"><a href="./">Home</a><span aria-current="page">Install</span></nav><p class="eyebrow">Technical-evaluator preview</p><h1>Use a real asset—or use source.</h1><p class="lede">This page checks GitHub Releases live. It does not send you to an empty “latest” URL or claim a signed installer exists when it does not.</p><div class="actions"><a class="button primary release-aware" href="./install.html">View install options</a><a class="button secondary" href="https://github.com/Sebby1770/file-organiser">Inspect the source</a></div><p class="release-note" data-release-status aria-live="polite">Checking GitHub Releases…</p></div></header>
+      <article class="content-shell">
+        <section><div class="callout warning"><p><strong>Current release builds are unsigned technical-evaluator builds.</strong> macOS Gatekeeper or Windows SmartScreen may warn or block them. Do not disable operating-system security globally. Verify the SHA-256 file, inspect the source if needed, and wait for signed distribution if you are not comfortable evaluating an unsigned build.</p></div></section>
+        <section><p class="eyebrow">Option A</p><h2>Packaged GitHub Release, when available.</h2><ol><li>Use the platform-aware button above only after it confirms a matching asset.</li><li>Open the Release page and read its notes, supported architecture, and known issues.</li><li>Download the matching asset and <code>SHA256SUMS.txt</code>.</li><li>Verify the checksum before opening the archive.</li><li>Keep a backup and begin with a small test folder.</li></ol><p>If no release or compatible asset can be verified, use the source option below. A successful CI artifact is not the same as a durable GitHub Release.</p></section>
+        <section><p class="eyebrow">Verify the download</p><h2>Compare SHA-256 before running it.</h2><p>From the folder containing the asset and checksum file:</p><pre><code># macOS or Linux
+shasum -a 256 FileOrganiser-*
+
+# Windows PowerShell
+Get-FileHash .\FileOrganiser-* -Algorithm SHA256</code></pre><p>Compare the complete hash with the matching line in <code>SHA256SUMS.txt</code>. A match confirms transfer integrity, not code signing or safety.</p></section>
+        <section><p class="eyebrow">Option B</p><h2>Run the source preview with Python 3.9+.</h2><pre><code>git clone https://github.com/Sebby1770/file-organiser.git
+cd file-organiser
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -e .
+python3 -m file_organiser</code></pre><p>On Windows PowerShell, activate with <code>.\.venv\Scripts\Activate.ps1</code>, then use <code>python</code> in place of <code>python3</code>. Installing from a checkout avoids confusion with the unrelated US-spelled package name on PyPI.</p><div class="callout"><p><strong>Do not run <code>pip install file-organizer</code>.</strong> That US-spelled PyPI name belongs to another project. The exact <code>file-organiser</code> distribution name is not reserved until this project publishes it.</p></div></section>
+        <section><p class="eyebrow">Build it yourself</p><h2>Create a local PyInstaller build.</h2><pre><code>python3 -m pip install pyinstaller
+python3 scripts/build_app.py</code></pre><p>The output is still unsigned unless you configure platform signing yourself. See <a href="https://github.com/Sebby1770/file-organiser/blob/main/SIGNING.md">SIGNING.md</a> for the release-readiness checklist.</p></section>
+        <section><p class="eyebrow">Compatibility</p><h2>What is and is not established.</h2><ul><li>The Python source targets Python 3.9 through 3.12.</li><li>The release workflow builds on the current GitHub-hosted macOS, Windows, and Ubuntu runners.</li><li>A runner build does not prove every OS version, CPU architecture, desktop environment, or permission setup.</li><li>macOS runner architecture and universal-binary status must be stated on each Release; do not assume Intel and Apple silicon are both supported.</li><li>Trusted installation requires real signing/notarisation setup, which is documented but not included as a repository secret.</li></ul></section>
+      </article>
+    </main>
+    <aside class="mobile-cta"><span data-release-status>Checking release…</span><a class="button primary release-aware" href="./install.html">Install options</a></aside>
+    <footer class="site-footer"><div class="footer-grid"><div><a class="brand" href="./"><img src="./icon.jpg" alt="" width="30" height="30" /><span>File Organiser</span></a><p>Local cleanup advice with safety rails.</p></div><div><h2>Product</h2><a href="./guide.html">Guide</a><a href="./safety.html">Safety</a><a href="./pricing.html">Pricing</a></div><div><h2>Trust</h2><a href="./privacy.html">Privacy</a><a href="./case-studies.html">Case studies</a><a href="./about.html">About</a></div></div><p class="footer-base">© <span data-year>2026</span> Sebastian Forbes · unsigned preview builds are for technical evaluation.</p></footer>
+  </body>
+</html>

@@ -1,0 +1,37 @@
+name: Case-study pilot request
+description: Request a measured, consent-based pilot without sharing private file data.
+title: "[Pilot request] "
+labels: ["pilot"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is a public request, not acceptance into a study. Do not attach exported reports, filenames, paths, screenshots of personal folders, credentials, or payment details.
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: [macOS, Windows, Linux]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: File Organiser version or commit
+      placeholder: "Example: v4.1.0 or commit abc1234"
+  - type: textarea
+    id: goal
+    attributes:
+      label: General cleanup goal
+      placeholder: "Example: understand an overcrowded Downloads folder."
+    validations:
+      required: true
+  - type: checkboxes
+    id: consent
+    attributes:
+      label: Acknowledgements
+      options:
+        - label: I have not included private file data.
+          required: true
+        - label: I understand publication would require a separate review and explicit consent to the exact wording.
+          required: true

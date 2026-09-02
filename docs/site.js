@@ -1,113 +1,203 @@
-const RULES = {
-  Images: [".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".svg", ".ico", ".bmp", ".tiff", ".raw", ".cr2", ".nef"],
-  Documents: [".pdf", ".doc", ".docx", ".txt", ".rtf", ".odt", ".md", ".tex", ".pages"],
-  Ebooks: [".epub", ".mobi", ".azw", ".azw3", ".fb2"],
-  Spreadsheets: [".xls", ".xlsx", ".csv", ".ods", ".tsv"],
-  Presentations: [".ppt", ".pptx", ".odp", ".key"],
-  Videos: [".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".flv"],
-  Audio: [".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma"],
-  Archives: [".zip", ".tar", ".gz", ".rar", ".7z", ".iso", ".img"],
-  Code: [".py", ".js", ".ts", ".java", ".c", ".cpp", ".go", ".rs", ".html", ".css", ".json", ".yml"],
-  Design: [".psd", ".ai", ".fig", ".sketch", ".xd"],
-  Models: [".obj", ".fbx", ".stl", ".glb", ".gltf", ".blend"],
-  Fonts: [".ttf", ".otf", ".woff", ".woff2"],
-  Executables: [".exe", ".dmg", ".deb", ".appimage", ".msi"],
-};
+const RELEASE_API = "https://api.github.com/repos/Sebby1770/file-organiser/releases/latest";
+const REPO_RELEASES = "https://github.com/Sebby1770/file-organiser/releases";
+const PRO_REQUEST = "https://github.com/Sebby1770/file-organiser/issues/new?template=pro-early-access.yml";
 
-const PACKS = {
-  downloads: `IMG_4032.jpg
-Screenshot 2026-08-01.png
-invoice-q3.pdf
-track.mp3
-notes.txt
-archive.zip
-main.py
-holiday.mkv
-resume.docx
-random.dat
-photo.heic
-book.epub
-model.stl
-Untitled
-setup.exe
-deck.pptx`,
-  camera: `DSC_1182.NEF
-IMG_9001.HEIC
-PXL_20260801_120000.jpg
-MVIMG_20260801_120001.jpg
-screenshot-lockscreen.png`,
-  desk: `assignment-2.pdf
-lecture-notes.md
-lab.py
-results.csv
-figure1.svg
-bibliography.bib
-thesis.tex
-model.blend`,
-};
-
-function extOf(name) {
-  const i = name.lastIndexOf(".");
-  return i >= 0 ? name.slice(i).toLowerCase() : "";
+function platform() {
+  const value = `${navigator.userAgent || ""} ${navigator.platform || ""}`;
+  if (/Mac|iPhone|iPad/i.test(value)) return { key: "macos", label: "macOS" };
+  if (/Win/i.test(value)) return { key: "windows", label: "Windows" };
+  if (/Linux/i.test(value)) return { key: "linux", label: "Linux" };
+  return { key: "", label: "your OS" };
 }
 
-function smart(name) {
-  if (/screenshot|screen[ _-]?shot|img_\d|dsc_|pxl_|mvimg/i.test(name)) return "Images";
-  if (/invoice|receipt|statement|resume|\bcv\b|assignment|thesis/i.test(name)) return "Documents";
-  return "";
-}
-
-function category(name) {
-  const ext = extOf(name);
-  for (const [cat, list] of Object.entries(RULES)) {
-    if (list.includes(ext)) return cat;
+function isTrustedReleaseUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "github.com" && url.pathname.startsWith("/Sebby1770/file-organiser/releases/");
+  } catch (_error) {
+    return false;
   }
-  return smart(name) || "Other";
 }
 
-function plan() {
-  const names = document
-    .querySelector("#names")
-    .value.split("\n")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const byDate = document.querySelector("#by-date").checked;
-  const counts = {};
-  const rows = names.map((name) => {
-    const cat = category(name);
-    counts[cat] = (counts[cat] || 0) + 1;
-    const dest = byDate ? `${cat}/YYYY/MM/${name}` : `${cat}/${name}`;
-    return `<tr><td>${name}</td><td>${cat}</td><td>${dest}</td></tr>`;
+function assetForPlatform(assets, key) {
+  const hints = {
+    macos: ["macos", ".app", "darwin"],
+    windows: ["windows", ".exe", "win64"],
+    linux: ["linux", "x86_64", "amd64"],
+  };
+  const wanted = hints[key] || [];
+  return (assets || []).find((asset) => {
+    const name = String(asset.name || "").toLowerCase();
+    return wanted.some((hint) => name.includes(hint));
   });
-  document.querySelector("#out").innerHTML = rows.join("") || `<tr><td colspan="3">Nothing to plan.</td></tr>`;
-  const bits = Object.entries(counts)
-    .sort((a, b) => b[1] - a[1])
-    .map(([cat, n]) => `${cat} ${n}`);
-  document.querySelector("#stats").textContent = names.length
-    ? `${names.length} files · ${bits.join(" · ")}`
-    : "";
 }
 
-document.querySelector("#plan").addEventListener("click", plan);
-document.querySelector("#by-date").addEventListener("change", plan);
-document.querySelectorAll("[data-pack]").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    document.querySelector("#names").value = PACKS[btn.dataset.pack] || "";
-    plan();
+function setReleaseStatus(message) {
+  document.querySelectorAll("[data-release-status]").forEach((node) => {
+    node.textContent = message;
   });
+}
+
+async function resolveRelease() {
+  const links = [...document.querySelectorAll(".release-aware")];
+  if (!links.length && !document.querySelector("[data-release-status]")) return;
+  const current = platform();
+  try {
+    const response = await fetch(RELEASE_API, { headers: { Accept: "application/vnd.github+json" } });
+    if (response.status === 404) {
+      setReleaseStatus("No packaged GitHub Release is published yet. Use the source preview; checkout is not live.");
+      return;
+    }
+    if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
+    const release = await response.json();
+    const asset = assetForPlatform(release.assets, current.key);
+    if (!asset || !isTrustedReleaseUrl(asset.browser_download_url)) {
+      setReleaseStatus(`${release.tag_name || "A release"} exists, but no verified ${current.label} asset was found. See install options.`);
+      return;
+    }
+    const target = `./thanks.html?intent=download&name=${encodeURIComponent(asset.name)}&next=${encodeURIComponent(asset.browser_download_url)}`;
+    links.forEach((link) => {
+      link.href = target;
+      link.textContent = `Download for ${current.label}`;
+    });
+    setReleaseStatus(`${release.tag_name || "Latest release"} has an unsigned ${current.label} test build. Platform warnings may appear.`);
+  } catch (_error) {
+    setReleaseStatus("Release availability could not be verified. Use the source instructions instead of assuming a download exists.");
+    links.forEach((link) => {
+      link.href = "./install.html";
+      link.textContent = "View install options";
+    });
+  }
+}
+
+function configureProFlow() {
+  document.querySelectorAll(".pro-interest").forEach((link) => {
+    link.href = `./thanks.html?intent=pro&next=${encodeURIComponent(PRO_REQUEST)}`;
+  });
+}
+
+function configureThanksPage() {
+  const panel = document.querySelector("[data-thanks-panel]");
+  if (!panel) return;
+  const query = new URLSearchParams(location.search);
+  const intent = query.get("intent");
+  const next = query.get("next") || "";
+  const title = panel.querySelector("[data-thanks-title]");
+  const copy = panel.querySelector("[data-thanks-copy]");
+  const action = panel.querySelector("[data-thanks-action]");
+  if (intent === "download" && isTrustedReleaseUrl(next)) {
+    title.textContent = "Thanks for trying the preview.";
+    copy.textContent = "Your test build is unsigned. Keep a backup, expect an operating-system warning, and begin with a folder you understand.";
+    action.textContent = `Download ${query.get("name") || "the release asset"}`;
+    action.href = next;
+    action.rel = "nofollow";
+    return;
+  }
+  if (intent === "pro" && next === PRO_REQUEST) {
+    title.textContent = "Thanks for helping shape Pro.";
+    copy.textContent = "Nothing has been submitted yet. Continue to GitHub to send the early-access request; do not include private filenames or payment details.";
+    action.textContent = "Continue to the GitHub request";
+    action.href = next;
+    return;
+  }
+  title.textContent = "Thanks for your interest.";
+  copy.textContent = "Choose a safe next step below. No form was submitted and no personal information was collected on this page.";
+  action.textContent = "View install options";
+  action.href = "./install.html";
+}
+
+function validMeasurementId(value) {
+  return /^G-[A-Z0-9]+$/.test(String(value || ""));
+}
+
+function loadAnalytics(config) {
+  const measurementId = config.measurementId;
+  window.dataLayer = window.dataLayer || [];
+  window.gtag = function gtag() {
+    window.dataLayer.push(arguments);
+  };
+  window.gtag("js", new Date());
+  window.gtag("config", measurementId, { anonymize_ip: true });
+  const script = document.createElement("script");
+  script.async = true;
+  script.src = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(measurementId)}`;
+  document.head.append(script);
+}
+
+function showAnalyticsChoice(config) {
+  document.querySelector(".consent-banner")?.remove();
+  if (!validMeasurementId(config.measurementId)) {
+    const notice = document.createElement("aside");
+    notice.className = "consent-banner";
+    const text = document.createElement("p");
+    text.textContent = "Google Analytics 4 is not configured, so this site is not loading it or sending analytics events.";
+    const actions = document.createElement("div");
+    actions.className = "consent-actions";
+    const close = document.createElement("button");
+    close.type = "button";
+    close.textContent = "Close";
+    close.addEventListener("click", () => notice.remove());
+    actions.append(close);
+    notice.append(text, actions);
+    document.body.append(notice);
+    return;
+  }
+  const banner = document.createElement("aside");
+  banner.className = "consent-banner";
+  banner.setAttribute("aria-label", "Optional Google Analytics choice");
+  const copy = document.createElement("p");
+  copy.textContent = "Allow optional Google Analytics 4 for public website pages? The site works without it. Desktop scans, filenames, paths, and cleanup actions are excluded.";
+  const actions = document.createElement("div");
+  actions.className = "consent-actions";
+  const decline = document.createElement("button");
+  decline.type = "button";
+  decline.textContent = "No thanks";
+  const accept = document.createElement("button");
+  accept.type = "button";
+  accept.className = "accept";
+  accept.textContent = "Allow analytics";
+  actions.append(decline, accept);
+  banner.append(copy, actions);
+  document.body.append(banner);
+  decline.addEventListener("click", () => {
+    localStorage.setItem("fo-analytics-consent", "no");
+    banner.remove();
+  });
+  accept.addEventListener("click", () => {
+    localStorage.setItem("fo-analytics-consent", "yes");
+    banner.remove();
+    loadAnalytics(config);
+  });
+}
+
+function configureAnalytics() {
+  const config = window.FILE_ORGANISER_ANALYTICS || {};
+  const settings = document.querySelectorAll("[data-analytics-settings]");
+  settings.forEach((button) => button.addEventListener("click", () => showAnalyticsChoice(config)));
+  const footerBase = document.querySelector(".footer-base");
+  if (footerBase && !settings.length) {
+    const separator = document.createTextNode(" · ");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "analytics-settings";
+    button.textContent = "Analytics choices";
+    button.addEventListener("click", () => showAnalyticsChoice(config));
+    footerBase.append(separator, button);
+  }
+  if (!validMeasurementId(config.measurementId)) return;
+  const choice = localStorage.getItem("fo-analytics-consent");
+  if (choice === "yes") {
+    loadAnalytics(config);
+    return;
+  }
+  if (choice === "no") return;
+  showAnalyticsChoice(config);
+}
+
+document.querySelectorAll("[data-year]").forEach((node) => {
+  node.textContent = String(new Date().getFullYear());
 });
-document.querySelector("#names").value = PACKS.downloads;
-plan();
-
-(function markDownload() {
-  const ua = navigator.userAgent || "";
-  const btn = document.querySelector("#primary-dl");
-  const line = document.querySelector("#os-line");
-  if (!btn) return;
-  let os = "your computer";
-  if (/Mac/i.test(ua) && !/iPhone|iPad/i.test(ua)) os = "Mac";
-  else if (/Win/i.test(ua)) os = "Windows";
-  else if (/Linux/i.test(ua)) os = "Linux";
-  btn.textContent = "Download for " + os;
-  if (line) line.textContent = os + " · double-click the app · no Terminal";
-})();
+configureProFlow();
+configureThanksPage();
+configureAnalytics();
+resolveRelease();

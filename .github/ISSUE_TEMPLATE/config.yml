@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Safety model
+    url: https://sebby1770.github.io/file-organiser/safety.html
+    about: Read the desktop safety boundaries before reporting a cleanup concern.
+  - name: Privacy information
+    url: https://sebby1770.github.io/file-organiser/privacy.html
+    about: Learn what stays local and avoid putting sensitive data in a public issue.

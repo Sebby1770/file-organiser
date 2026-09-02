@@ -22,10 +22,10 @@ def test_main_no_args_opens_app(monkeypatch):
     assert called.get("app") is True
 
 
-def test_version_400():
+def test_version_410():
     from file_organiser import __version__
 
-    assert __version__ == "4.0.0"
+    assert __version__ == "4.1.0"
 
 
 def test_node_modules_is_delete(tmp_path: Path):
@@ -60,12 +60,12 @@ def test_ssh_is_protected(tmp_path: Path):
     assert kind == "protected"
 
 
-def test_old_installer_in_downloads_is_delete(tmp_path: Path):
+def test_old_installer_in_downloads_requires_review(tmp_path: Path):
     dmg = tmp_path / "Downloads" / "Setup.dmg"
     dmg.parent.mkdir()
     dmg.write_bytes(b"x" * 64)
     bucket, reason, kind = classify_path(dmg, size=64, age_days=40)
-    assert bucket == "delete"
+    assert bucket == "review"
     assert kind == "installer"
     assert "installer" in reason.lower()
 
@@ -112,7 +112,8 @@ def test_scan_and_advice_roundtrip(tmp_path: Path):
     keep_names = {row["name"] for row in advice["keep"]}
     assert "node_modules" in delete_names
     assert ".DS_Store" in delete_names
-    assert "OldApp.dmg" in delete_names
+    review_names = {row["name"] for row in advice["review"]}
+    assert "OldApp.dmg" in review_names
     assert "Documents" in keep_names
     assert "blob.js" not in keep_names
     assert advice["summary"]["delete_bytes"] >= 9000

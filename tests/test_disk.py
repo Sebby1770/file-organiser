@@ -20,7 +20,7 @@ def test_scan_usage_tmp(tmp_path):
 def test_candidate_roots_include_home():
     roots = candidate_roots()
     assert roots
-    assert any(r["label"] in {"This computer", "Home", "Downloads"} for r in roots)
+    assert any(r["label"] in {"Home folder", "Home", "Downloads"} for r in roots)
 
 
 def test_scan_counts_node_modules_as_waste(tmp_path):

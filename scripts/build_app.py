@@ -1,4 +1,4 @@
-"""Build a double-clickable desktop app with PyInstaller. No terminal required."""
+"""Build an unsigned local desktop app with PyInstaller."""
 
 from __future__ import annotations
 
@@ -36,4 +36,4 @@ args = [
 if sys.platform == "darwin":
     args.extend(["--osx-bundle-identifier", "com.sebby1770.fileorganiser"])
 PyInstaller.__main__.run(args)
-print("Double-click dist/FileOrganiser (or FileOrganiser.app on macOS).")
+print("Built an unsigned evaluator app in dist/. Platform security warnings may appear.")

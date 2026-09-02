@@ -3,7 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>File Organiser</title>
+    <meta name="file-organiser-session" content="__FILE_ORGANISER_TOKEN__" />
+    <title>File Organiser — private cleanup advice</title>
     <link rel="stylesheet" href="/app.css" />
   </head>
   <body>
@@ -11,24 +12,24 @@
       <div class="brand"><span class="mark"></span>File Organiser</div>
       <form class="pathbar" id="path-form">
         <button class="btn ghost" type="button" id="browse">Choose folder</button>
-        <input id="path" type="text" spellcheck="false" placeholder="Scan this computer, or pick a folder" />
+        <input id="path" type="text" spellcheck="false" placeholder="Scan your home folder, or choose another folder" />
         <button class="btn" type="submit">Scan</button>
         <button class="btn ghost" type="button" id="cancel">Stop</button>
       </form>
-      <p class="status" id="status">Scan this computer. We’ll say what to delete, what to review, and what to keep.</p>
+      <p class="status" id="status">Scan a folder. We’ll say what to delete, what to review, and what to keep.</p>
     </header>
     <div class="progress" id="progress" hidden><i id="pbar"></i></div>
 
     <section class="welcome" id="welcome">
-      <p class="eyebrow">Local app · nothing uploaded · v4</p>
-      <h1>See what’s eating the disk.</h1>
+      <p class="eyebrow">Local app · nothing uploaded · v4.1</p>
+      <h1>Find space without guessing.</h1>
       <p class="lede">
-        Scan this computer. File Organiser maps every folder, then tells you
+        Scan your home folder, Downloads, or a folder you choose. File Organiser maps what it can read, then tells you
         what is safe to delete, what you should look at, and what to leave alone.
-        Trash is a button you press — never an automatic wipe.
+        Most hidden personal folders are skipped. Trash is a button you press — never an automatic wipe.
       </p>
       <p class="hero-actions">
-        <button class="btn" type="button" id="scan-computer">Scan this computer</button>
+        <button class="btn" type="button" id="scan-computer">Scan my home folder</button>
         <button class="btn ghost" type="button" id="scan-downloads">Scan Downloads</button>
         <button class="btn ghost" type="button" id="welcome-browse">Choose a folder</button>
       </p>
@@ -75,7 +76,11 @@
             <p class="eyebrow">Advice</p>
             <h2 id="headline">What to delete, what to keep</h2>
           </div>
-          <p class="board-note">Checked items on Delete go to Trash. Review never auto-deletes. Keep is locked.</p>
+          <div class="board-actions">
+            <button class="btn ghost" type="button" id="export-json">Export JSON</button>
+            <button class="btn ghost" type="button" id="export-csv">Export CSV</button>
+            <p class="board-note">Checked items on Delete go to Trash. Review and Keep are locked in the app.</p>
+          </div>
         </header>
         <div class="cols">
           <article class="col delete" id="col-delete">

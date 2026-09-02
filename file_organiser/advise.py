@@ -126,10 +126,10 @@ def classify_path(
     suffix = path.suffix.lower()
     if suffix in INSTALLER_EXTS:
         in_downloads = "Downloads" in path.parts
-        if in_downloads and age_days is not None and age_days >= 14:
+        if in_downloads and age_days is not None and age_days >= 45:
             return (
-                "delete",
-                f"Old installer in Downloads ({int(age_days)} days). The app is usually already installed.",
+                "review",
+                f"Old installer in Downloads ({int(age_days)} days). Confirm the app is installed before trashing it.",
                 "installer",
             )
         if in_downloads:
@@ -137,7 +137,7 @@ def classify_path(
         return ("review", "Installer package. Only trash it if the app is already installed.", "installer")
 
     if size == 0 and not is_dir:
-        return ("delete", "Empty file. Nothing in it.", "empty")
+        return ("review", "Empty file. It may still be a marker used by an app or project.", "empty")
 
     if is_dir and name.lower() in {"node_modules", "__pycache__", "caches"}:
         return ("delete", "Regenerable cache. Apps and installs will recreate this.", "cache")
