@@ -11,7 +11,9 @@ from __future__ import annotations
 import json
 import mimetypes
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List
+
+from .safety import SafetyError, validate_category_name
 
 # Default categories. Extensions must be lowercase and include the dot.
 DEFAULT_RULES: Dict[str, List[str]] = {
@@ -35,6 +37,52 @@ DEFAULT_RULES: Dict[str, List[str]] = {
 }
 
 OTHER_CATEGORY = "Other"
+DEFAULT_PROFILE = "standard"
+
+
+def _combined(*categories: str) -> List[str]:
+    values: List[str] = []
+    for category in categories:
+        values.extend(DEFAULT_RULES[category])
+    return values
+
+
+# Profiles intentionally describe different folder layouts, not just filters.
+# Every built-in profile covers every default extension so selecting a profile
+# never silently demotes known files to Other.
+BUILTIN_PROFILES: Dict[str, Dict[str, Any]] = {
+    "standard": {
+        "description": "Detailed folders for each common file type.",
+        "rules": DEFAULT_RULES,
+    },
+    "downloads": {
+        "description": "A compact Downloads layout with fewer top-level folders.",
+        "rules": {
+            "Pictures": _combined("Images", "Design"),
+            "Documents": _combined(
+                "Documents", "Ebooks", "Spreadsheets", "Presentations"
+            ),
+            "Media": _combined("Videos", "Audio"),
+            "Archives": list(DEFAULT_RULES["Archives"]),
+            "Applications": list(DEFAULT_RULES["Executables"]),
+            "Code": list(DEFAULT_RULES["Code"]),
+            "3D Models": list(DEFAULT_RULES["Models"]),
+            "Fonts": list(DEFAULT_RULES["Fonts"]),
+        },
+    },
+    "minimal": {
+        "description": "Five broad folders for a low-maintenance layout.",
+        "rules": {
+            "Media": _combined("Images", "Design", "Videos", "Audio", "Models", "Fonts"),
+            "Documents": _combined(
+                "Documents", "Ebooks", "Spreadsheets", "Presentations"
+            ),
+            "Archives": list(DEFAULT_RULES["Archives"]),
+            "Applications": list(DEFAULT_RULES["Executables"]),
+            "Code": list(DEFAULT_RULES["Code"]),
+        },
+    },
+}
 
 # Local and XDG-style config discovery paths (checked when --config omitted).
 LOCAL_CONFIG_NAME = ".file-organiser.json"
@@ -111,38 +159,151 @@ def discover_config(explicit: Path | None = None) -> Path | None:
     return None
 
 
-def load_rules(config_path: Path | None = None) -> Dict[str, List[str]]:
-    """Load rules from a JSON file, or return the defaults.
+def _normalize_rules(data: object, *, source: str) -> Dict[str, List[str]]:
+    if not isinstance(data, dict) or not data:
+        raise ValueError(
+            f"{source} must map category names to non-empty extension lists."
+        )
 
-    The JSON file should map category names to a list of extensions:
-        {"Images": [".jpg", ".png"], "Docs": [".pdf"]}
-    """
-    if config_path is None:
-        return dict(DEFAULT_RULES)
+    normalized: Dict[str, List[str]] = {}
+    owners: Dict[str, str] = {}
+    category_names: Dict[str, str] = {}
+    for raw_category, exts in data.items():
+        try:
+            category = validate_category_name(raw_category)
+        except SafetyError as exc:
+            raise ValueError(f"Invalid category in {source}: {exc}") from exc
+        folded_category = category.casefold()
+        previous_category = category_names.get(folded_category)
+        if previous_category is not None and previous_category != category:
+            raise ValueError(
+                f"Category names '{previous_category}' and '{category}' collide "
+                "on a case-insensitive filesystem."
+            )
+        category_names[folded_category] = category
+        if not isinstance(exts, list) or not exts:
+            raise ValueError(
+                f"Category '{category}' in {source} must map to a non-empty list "
+                "of extensions."
+            )
+        values: List[str] = []
+        for raw_extension in exts:
+            if not isinstance(raw_extension, str) or not raw_extension.strip():
+                raise ValueError(
+                    f"Category '{category}' in {source} has a non-string or empty extension."
+                )
+            extension = raw_extension.strip().lower()
+            if any(separator in extension for separator in ("/", "\\", "\x00")):
+                raise ValueError(
+                    f"Unsafe extension {raw_extension!r} in category '{category}'."
+                )
+            if not extension.startswith("."):
+                extension = f".{extension}"
+            previous = owners.get(extension)
+            if previous is not None and previous != category:
+                raise ValueError(
+                    f"Extension {extension!r} is assigned to both "
+                    f"'{previous}' and '{category}'."
+                )
+            owners[extension] = category
+            if extension not in values:
+                values.append(extension)
+        normalized[category] = values
+    return normalized
 
+
+def _read_config(config_path: Path) -> Dict[str, Any]:
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
-
     try:
         with config_path.open("r", encoding="utf-8") as f:
             data = json.load(f)
     except json.JSONDecodeError as e:
         raise ValueError(f"Invalid JSON in config file: {e}") from e
-
     if not isinstance(data, dict):
-        raise ValueError(
-            "Config file must contain a JSON object mapping categories to extension lists."
-        )
+        raise ValueError("Config file must contain a JSON object.")
+    return data
 
-    # Normalize: lowercase extensions, ensure leading dot.
-    normalized: Dict[str, List[str]] = {}
-    for category, exts in data.items():
-        if not isinstance(exts, list):
-            raise ValueError(f"Category '{category}' must map to a list of extensions.")
-        normalized[category] = [
-            (e if e.startswith(".") else f".{e}").lower() for e in exts
+
+def load_rules(
+    config_path: Path | None = None,
+    profile: str | None = None,
+) -> Dict[str, List[str]]:
+    """Load a built-in, legacy custom, or named custom profile.
+
+    Legacy JSON still maps categories directly to extension lists::
+
+        {"Images": [".jpg", ".png"], "Docs": [".pdf"]}
+
+    A profile config uses ``{"version": 1, "default_profile": "work",
+    "profiles": {"work": {"rules": {...}}}}``.
+    """
+    if config_path is None:
+        selected = profile or DEFAULT_PROFILE
+        spec = BUILTIN_PROFILES.get(selected)
+        if spec is None:
+            choices = ", ".join(sorted(BUILTIN_PROFILES))
+            raise ValueError(f"Unknown built-in profile '{selected}'. Choose: {choices}")
+        return _normalize_rules(spec["rules"], source=f"profile '{selected}'")
+
+    data = _read_config(config_path)
+    profiles = data.get("profiles")
+    if not isinstance(profiles, dict):
+        if profile and profile not in {"custom", "default"}:
+            raise ValueError(
+                "This legacy config has one unnamed profile; omit --profile."
+            )
+        return _normalize_rules(data, source=str(config_path))
+
+    if data.get("version", 1) != 1:
+        raise ValueError(f"Unsupported profile config version: {data.get('version')}")
+    selected = profile or data.get("default_profile")
+    if selected is None:
+        selected = next(iter(profiles), None)
+    if not isinstance(selected, str) or selected not in profiles:
+        choices = ", ".join(sorted(str(name) for name in profiles))
+        raise ValueError(f"Unknown profile '{selected}'. Choose: {choices}")
+    spec = profiles[selected]
+    rules_data = spec.get("rules") if isinstance(spec, dict) and "rules" in spec else spec
+    return _normalize_rules(
+        rules_data,
+        source=f"profile '{selected}' in {config_path}",
+    )
+
+
+def available_profiles(config_path: Path | None = None) -> List[Dict[str, str]]:
+    """Return profile names and descriptions for CLI/UI discovery."""
+    if config_path is None:
+        return [
+            {
+                "name": name,
+                "description": str(spec.get("description", "")),
+                "source": "built-in",
+            }
+            for name, spec in sorted(BUILTIN_PROFILES.items())
         ]
-    return normalized
+    data = _read_config(config_path)
+    profiles = data.get("profiles")
+    if not isinstance(profiles, dict):
+        return [
+            {
+                "name": "custom",
+                "description": "Legacy single-profile rules file.",
+                "source": str(config_path),
+            }
+        ]
+    result: List[Dict[str, str]] = []
+    for raw_name, spec in sorted(profiles.items()):
+        name = validate_category_name(raw_name)
+        description = spec.get("description", "") if isinstance(spec, dict) else ""
+        result.append(
+            {
+                "name": name,
+                "description": str(description),
+                "source": str(config_path),
+            }
+        )
+    return result
 
 
 def category_for_extension(ext: str, rules: Dict[str, List[str]]) -> str:
