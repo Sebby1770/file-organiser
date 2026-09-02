@@ -85,33 +85,6 @@ python3 -m file_organiser doctor
 
 Dry-run is the default for destructive CLI workflows. CLI flags can expose actions beyond the guarded desktop interface; read `--help` before applying them.
 
-## Build and test
-
-```bash
-python3 -m pip install -e ".[test]"
-python3 -m pytest -q
-python3 -m pip install pyinstaller
-python3 scripts/build_app.py
-```
-
-The tag-triggered `release-app` workflow tests, packages each runner output, creates `SHA256SUMS.txt`, and publishes durable assets to a GitHub Release. Signing and notarisation credentials are intentionally not included.
-
-## Commercial direction
-
-The current source preview remains MIT licensed. The planned Founding Supporter offer is US$19 one time (intended US$29 later), but checkout is not live. Paid value must exist before sale: signed delivery, managed updates, scan history, reminders, and a support response target.
-
-See [COMMERCIAL.md](COMMERCIAL.md) for launch gates, [PUBLISHING.md](PUBLISHING.md) for safe Python publishing preparation, and the public [pricing page](https://sebby1770.github.io/file-organiser/pricing.html) for the customer-facing boundary.
-
-## Privacy and responsible reports
-
-The public site ships with a blank GA4 measurement ID. No Google Analytics request is made until a valid ID is configured and the visitor explicitly opts in. Desktop file data is excluded from website analytics.
-
-Bug reports and early-access requests are public GitHub issues. Never paste filenames, home paths, exported reports, credentials, payment information, or employer data.
-
-## Licence
-
-[MIT](LICENSE) © Sebastian Forbes.
-
 ## Safe transaction workflow
 
 Organising is now a validated transaction. A normal `organize` command is a
@@ -139,8 +112,9 @@ file-organiser apply /tmp/downloads-plan.json --apply  # commit
 Use `--fast-fingerprint` with `plan` only when scan speed matters more than
 content-level drift detection; it records size and modification time instead.
 JSON and Markdown reports include the transaction id and whether the result was
-planned, committed, or rolled back; CSV keeps stable move columns. Paths, categories, symlink components, and stale
-source/destination fingerprints are revalidated before anything is changed.
+planned, committed, or rolled back; CSV keeps stable move columns. Paths,
+categories, symlink components, and stale source/destination fingerprints are
+revalidated before anything is changed.
 
 Built-in profiles are `standard`, `downloads`, and `minimal`. A custom rules
 file can expose named profiles with this shape:
@@ -157,5 +131,32 @@ file can expose named profiles with this shape:
   }
 }
 ```
+
+## Build and test
+
+```bash
+python3 -m pip install -e ".[test]"
+python3 -m pytest -q
+python3 -m pip install pyinstaller
+python3 scripts/build_app.py
+```
+
+The tag-triggered `release-app` workflow tests, packages each runner output, creates `SHA256SUMS.txt`, and publishes durable assets to a GitHub Release. Signing and notarisation credentials are intentionally not included.
+
+## Commercial direction
+
+The current source preview remains MIT licensed. The planned Founding Supporter offer is US$19 one time (intended US$29 later), but checkout is not live. Paid value must exist before sale: signed delivery, managed updates, scan history, reminders, and a support response target.
+
+See [COMMERCIAL.md](COMMERCIAL.md) for launch gates, [PUBLISHING.md](PUBLISHING.md) for safe Python publishing preparation, and the public [pricing page](https://sebby1770.github.io/file-organiser/pricing.html) for the customer-facing boundary.
+
+## Privacy and responsible reports
+
+The public site ships with a blank GA4 measurement ID. No Google Analytics request is made until a valid ID is configured and the visitor explicitly opts in. Desktop file data is excluded from website analytics.
+
+Bug reports and early-access requests are public GitHub issues. Never paste filenames, home paths, exported reports, credentials, payment information, or employer data.
+
+## Licence
+
+[MIT](LICENSE) © Sebastian Forbes.
 
 Site and source: [GitHub](https://github.com/Sebby1770/file-organiser). MIT.
