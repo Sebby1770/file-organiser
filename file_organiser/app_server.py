@@ -21,10 +21,12 @@ from .advise import build_advice, is_protected, is_safe_delete
 from .disk import candidate_roots, prune_tree, scan_usage, text_map
 from .duplicates import choose_keeper, file_sha256, find_duplicates, reclaimable_bytes
 from .explain import explain_path
+from .history import HistoryManager
 from .organizer import build_preview_plan
-from .rules import load_rules
+from .rules import available_profiles, load_rules
 from .scanner import format_size
 from .safety import dangerous_target
+from .transaction import TransactionResult, execute_plan, undo_latest
 
 STATIC = Path(__file__).resolve().parent / "static"
 
@@ -43,6 +45,13 @@ class AppState:
         self.maps = None
         self.advice: dict[str, Any] | None = None
         self.duplicate_groups: dict[str, tuple[str, tuple[Path, ...]]] = {}
+        # Organise previews never round-trip back from browser input. The exact
+        # fingerprinted plan is retained in server memory and consumed once by
+        # an apply request carrying its opaque id.
+        self.organize_plan: dict[str, Any] | None = None
+        self.organize_busy = False
+        self.mutation_lock = threading.Lock()
+        self.scan_generation = 0
         # Every app launch gets a fresh bearer token. It is injected into the
         # local UI and required for every mutating request, which prevents a
         # random website from driving this localhost service through CSRF.
@@ -59,6 +68,23 @@ class AppState:
 
 
 STATE = AppState()
+
+
+def _transaction_payload(result: TransactionResult) -> dict[str, Any]:
+    """Return the stable, path-free transaction result exposed to the UI."""
+    payload: dict[str, Any] = {
+        "ok": result.ok,
+        "transaction_id": result.transaction_id,
+        "mode": result.mode,
+        "planned": result.planned,
+        "completed": result.completed,
+        "dry_run": result.dry_run,
+        "rolled_back": result.rolled_back,
+        "errors": list(result.errors),
+    }
+    if result.errors:
+        payload["error"] = result.errors[0]
+    return payload
 
 
 def _trash(path: Path) -> str:
@@ -166,10 +192,13 @@ def _reveal(path: Path) -> None:
 def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = None, open_browser: bool = True) -> None:
     if not _loopback_host(host):
         raise ValueError("the desktop app may only bind to a loopback address")
-    if folder:
-        STATE.root = folder.expanduser().resolve()
-    STATE.session_token = secrets.token_urlsafe(32)
-    STATE.duplicate_groups = {}
+    with STATE.lock:
+        if folder:
+            STATE.root = folder.expanduser().resolve()
+        STATE.session_token = secrets.token_urlsafe(32)
+        STATE.duplicate_groups = {}
+        STATE.organize_plan = None
+        STATE.organize_busy = False
 
     class Handler(BaseHTTPRequestHandler):
         server_version = f"FileOrganiserApp/{__version__}"
@@ -218,6 +247,9 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
             if path == "/api/roots":
                 self._json({"ok": True, "roots": candidate_roots()})
                 return
+            if path == "/api/profiles":
+                self._json({"ok": True, "profiles": available_profiles()})
+                return
             if path == "/api/status":
                 with STATE.lock:
                     self._json(
@@ -229,6 +261,7 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                             "label": format_size(STATE.bytes),
                             "root": str(STATE.root) if STATE.root else None,
                             "error": STATE.error,
+                            "organize_busy": STATE.organize_busy,
                         }
                     )
                 return
@@ -261,6 +294,12 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                     if STATE.advice is None and STATE.result:
                         STATE.advice = build_advice(STATE.result)
                     self._json({"ok": True, "advice": STATE.advice, "status": STATE.status})
+                return
+            if path == "/api/organize/status":
+                if not self._request_authorized():
+                    self._json({"ok": False, "error": "invalid local app session"}, 403)
+                    return
+                self._json(self._organize_status())
                 return
             if path == "/api/report":
                 if not self._request_authorized():
@@ -314,12 +353,82 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                 self._json({"ok": False, "error": "JSON body must be an object"}, 400)
                 return
             route = parsed.path
+            exclusive_routes = {
+                "/api/scan",
+                "/api/trash",
+                "/api/organize",
+                "/api/organize/plan",
+                "/api/organize/apply",
+                "/api/organize/undo",
+                "/api/dupes",
+                "/api/dupes/purge",
+                "/api/advise/purge",
+            }
+            if route in exclusive_routes:
+                if not STATE.mutation_lock.acquire(blocking=False):
+                    self._json(
+                        {
+                            "ok": False,
+                            "error": "another filesystem operation is running",
+                        },
+                        409,
+                    )
+                    return
+                try:
+                    self._dispatch_exclusive(route, body)
+                finally:
+                    STATE.mutation_lock.release()
+                return
+            self._dispatch_post(route, body)
+
+        def _dispatch_exclusive(
+            self,
+            route: str,
+            body: dict[str, Any],
+        ) -> None:
+            with STATE.lock:
+                scan_running = STATE.status == "running"
+            if scan_running and route != "/api/scan":
+                self._json(
+                    {"ok": False, "error": "wait for the scan to finish"},
+                    409,
+                )
+                return
             if route == "/api/scan":
                 self._json(self._start_scan(body))
                 return
             if route == "/api/trash":
                 self._json(self._do_trash(body))
                 return
+            if route in {"/api/organize", "/api/organize/plan"}:
+                if route == "/api/organize" and body.get("apply"):
+                    self._json(
+                        {
+                            "ok": False,
+                            "error": "apply requires the reviewed plan id",
+                        }
+                    )
+                    return
+                self._json(self._do_organize(body, action="plan"))
+                return
+            if route == "/api/organize/apply":
+                self._json(self._do_organize(body, action="apply"))
+                return
+            if route == "/api/organize/undo":
+                self._json(self._undo_organize(body))
+                return
+            if route == "/api/dupes":
+                self._json(self._do_dupes(body))
+                return
+            if route == "/api/dupes/purge":
+                self._json(self._purge_dupes(body))
+                return
+            if route == "/api/advise/purge":
+                self._json(self._purge_advice(body))
+                return
+            self._json({"error": "not found"}, 404)
+
+        def _dispatch_post(self, route: str, body: dict[str, Any]) -> None:
             if route == "/api/reveal":
                 target = Path(str(body.get("path") or "")).expanduser()
                 try:
@@ -332,15 +441,6 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                     return
                 _reveal(target)
                 self._json({"ok": True})
-                return
-            if route == "/api/organize":
-                self._json(self._do_organize(body))
-                return
-            if route == "/api/dupes":
-                self._json(self._do_dupes(body))
-                return
-            if route == "/api/dupes/purge":
-                self._json(self._purge_dupes(body))
                 return
             if route == "/api/zoom":
                 self._json(self._zoom(body))
@@ -365,9 +465,6 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                     STATE.advice = build_advice(STATE.result)
                     self._json({"ok": True, "advice": STATE.advice})
                 return
-            if route == "/api/advise/purge":
-                self._json(self._purge_advice(body))
-                return
             self._json({"error": "not found"}, 404)
 
         def _start_scan(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -384,6 +481,11 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
             with STATE.lock:
                 if STATE.status == "running":
                     return {"ok": False, "error": "scan already running"}
+                if STATE.organize_busy:
+                    return {
+                        "ok": False,
+                        "error": "wait for the organise transaction to finish",
+                    }
                 STATE.status = "running"
                 STATE.root = folder
                 STATE.result = None
@@ -394,6 +496,8 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                 STATE.maps = None
                 STATE.advice = None
                 STATE.duplicate_groups = {}
+                STATE.organize_plan = None
+                STATE.scan_generation += 1
 
             def job() -> None:
                 try:
@@ -443,7 +547,47 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                 return {"ok": False, "error": str(exc)}
             return {"ok": True, "action": action, "path": str(target)}
 
-        def _do_organize(self, body: dict[str, Any]) -> dict[str, Any]:
+        def _do_organize(
+            self,
+            body: dict[str, Any],
+            *,
+            action: str,
+        ) -> dict[str, Any]:
+            if action == "apply":
+                requested_id = str(body.get("plan_id") or "").strip()
+                if not requested_id:
+                    return {
+                        "ok": False,
+                        "error": "preview an organise plan before applying it",
+                    }
+                with STATE.lock:
+                    if STATE.organize_busy:
+                        return {
+                            "ok": False,
+                            "error": "another organise transaction is running",
+                        }
+                    plan = STATE.organize_plan
+                    if not plan:
+                        return {
+                            "ok": False,
+                            "error": "organise preview expired; create a new plan",
+                        }
+                    if requested_id != str(plan.get("id") or ""):
+                        return {
+                            "ok": False,
+                            "error": "organise plan changed; review the current plan",
+                        }
+                    # A preview is single-use even when apply fails. A stale or
+                    # partially invalid plan should always be reviewed afresh.
+                    STATE.organize_plan = None
+                    STATE.organize_busy = True
+                try:
+                    result = execute_plan(plan, dry_run=False, force=False)
+                finally:
+                    with STATE.lock:
+                        STATE.organize_busy = False
+                return _transaction_payload(result)
+
             folder = Path(str(body.get("path") or (STATE.root or ""))).expanduser()
             if not folder.is_dir():
                 return {"ok": False, "error": "not a directory"}
@@ -456,32 +600,138 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
             danger = dangerous_target(folder)
             if danger:
                 return {"ok": False, "error": danger}
-            plan = build_preview_plan(
-                folder,
-                STATE.rules,
-                recursive=bool(body.get("recursive", True)),
-                use_magic=bool(body.get("magic", True)),
-                use_smart=bool(body.get("smart", True)),
-            )
-            if body.get("apply"):
-                from io import StringIO
-
-                from rich.console import Console
-
-                from .organizer import organize
-
-                n = organize(
+            profile = str(body.get("profile") or "standard").strip()
+            try:
+                rules = load_rules(None, profile=profile)
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+            with STATE.lock:
+                if STATE.status == "running":
+                    return {"ok": False, "error": "wait for the scan to finish"}
+                if STATE.organize_busy:
+                    return {
+                        "ok": False,
+                        "error": "another organise transaction is running",
+                    }
+                generation = STATE.scan_generation
+                expected_root = STATE.root
+            try:
+                plan = build_preview_plan(
                     folder,
-                    STATE.rules,
-                    Console(file=StringIO()),
-                    dry_run=False,
-                    recursive=bool(body.get("recursive", True)),
-                    use_magic=True,
-                    use_smart=True,
-                    force=False,
+                    rules,
+                    recursive=bool(body.get("recursive", False)),
+                    use_magic=bool(body.get("magic", True)),
+                    use_smart=bool(body.get("smart", True)),
+                    profile=profile,
+                    # Desktop apply is deliberately the strongest mode. A
+                    # plan is reviewed once, then every byte is verified again
+                    # before the server commits that exact plan.
+                    content_hash=True,
                 )
-                return {"ok": True, "plan": plan, "moved": n}
+            except (OSError, ValueError) as exc:
+                return {"ok": False, "error": str(exc)}
+            with STATE.lock:
+                if (
+                    STATE.scan_generation != generation
+                    or STATE.root != expected_root
+                    or STATE.status == "running"
+                ):
+                    return {
+                        "ok": False,
+                        "error": "the scanned folder changed; create the plan again",
+                    }
+                STATE.organize_plan = plan
             return {"ok": True, "plan": plan}
+
+        def _organize_status(self) -> dict[str, Any]:
+            with STATE.lock:
+                root = STATE.root
+                plan = STATE.organize_plan
+                busy = STATE.organize_busy
+                pending = None
+                if plan:
+                    pending = {
+                        "plan_id": str(plan.get("id") or ""),
+                        "count": int(plan.get("count") or 0),
+                        "total_bytes": int(plan.get("total_bytes") or 0),
+                        "profile": str(plan.get("profile") or "standard"),
+                        "verification": str(plan.get("verification") or ""),
+                    }
+            if root is None:
+                return {
+                    "ok": True,
+                    "busy": busy,
+                    "pending": pending,
+                    "undo": None,
+                }
+            if busy:
+                return {"ok": True, "busy": True, "pending": pending, "undo": None}
+            snapshot = HistoryManager(root).peek()
+            if not snapshot:
+                return {
+                    "ok": True,
+                    "busy": False,
+                    "pending": pending,
+                    "undo": None,
+                }
+            transaction_id = str(snapshot.get("id") or "legacy")
+            checked = undo_latest(
+                root,
+                dry_run=True,
+                force=False,
+                expected_id=transaction_id,
+            )
+            summary = snapshot.get("summary")
+            count = len(snapshot.get("moves", []))
+            if isinstance(summary, dict):
+                count = int(summary.get("count") or count)
+            return {
+                "ok": True,
+                "busy": False,
+                "pending": pending,
+                "undo": {
+                    "transaction_id": transaction_id,
+                    "timestamp": str(snapshot.get("timestamp") or ""),
+                    "mode": str(snapshot.get("mode") or "move"),
+                    "count": count,
+                    "ready": checked.ok,
+                    "error": checked.errors[0] if checked.errors else "",
+                },
+            }
+
+        def _undo_organize(self, body: dict[str, Any]) -> dict[str, Any]:
+            requested_id = str(body.get("transaction_id") or "").strip()
+            if not requested_id:
+                return {
+                    "ok": False,
+                    "error": "review the latest transaction before undoing it",
+                }
+            with STATE.lock:
+                root = STATE.root
+                if STATE.organize_busy:
+                    return {
+                        "ok": False,
+                        "error": "another organise transaction is running",
+                    }
+                STATE.organize_busy = True
+            if root is None:
+                with STATE.lock:
+                    STATE.organize_busy = False
+                return {"ok": False, "error": "scan a folder first"}
+            try:
+                result = undo_latest(
+                    root,
+                    dry_run=False,
+                    force=False,
+                    expected_id=requested_id,
+                )
+            finally:
+                with STATE.lock:
+                    STATE.organize_busy = False
+            if result.ok:
+                with STATE.lock:
+                    STATE.organize_plan = None
+            return _transaction_payload(result)
 
         def _zoom(self, body: dict[str, Any]) -> dict[str, Any]:
             target = Path(str(body.get("path") or "")).expanduser()

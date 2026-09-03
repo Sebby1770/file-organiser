@@ -623,7 +623,14 @@ def execute_plan(
                 else:
                     os.symlink(str(source), str(destination))
                 item["applied"] = True
-                resulting_state = entry_state(destination)
+                # Keep content-level verification through undo when the plan
+                # paid the cost of hashing its sources. This prevents a
+                # same-size/same-mtime replacement from being mistaken for
+                # the file produced by this transaction.
+                resulting_state = entry_state(
+                    destination,
+                    content_hash="sha256" in operation.source_state,
+                )
                 history_operations.append(
                     {
                         "source": str(source),
@@ -788,8 +795,14 @@ def undo_latest(
     *,
     dry_run: bool = False,
     force: bool = False,
+    expected_id: str | None = None,
 ) -> TransactionResult:
-    """Safely undo the latest journal snapshot without losing history on error."""
+    """Safely undo the latest journal snapshot without losing history on error.
+
+    ``expected_id`` binds an interactive confirmation to the exact history
+    entry the user reviewed. It closes the gap where another process could add
+    a newer transaction between displaying Undo and handling the click.
+    """
     try:
         root = resolved_root(folder)
     except SafetyError as exc:
@@ -801,6 +814,14 @@ def undo_latest(
     rows = _history_rows(snapshot)
     transaction_id = str(snapshot.get("id") or "legacy")
     mode = str(snapshot.get("mode", "move"))
+    if expected_id is not None and expected_id != transaction_id:
+        return TransactionResult(
+            transaction_id,
+            mode,
+            len(rows),
+            dry_run=dry_run,
+            errors=["undo history changed; review the latest transaction again"],
+        )
     try:
         prepared = _validate_undo(root, snapshot)
     except (PlanError, SafetyError, OSError) as exc:

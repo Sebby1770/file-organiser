@@ -58,7 +58,7 @@ Do **not** run `pip install file-organizer`: that US-spelled PyPI name belongs t
 - Protected-path locks enforced by the local server.
 - Per-launch API token, loopback Host enforcement, exact-Origin checks, restrictive browser headers, and JSON-only mutations.
 - Duplicate hashing with an explicit keeper and immediate pre-action revalidation.
-- Preview-first category organisation with existing history and undo support.
+- Content-fingerprinted desktop organisation: preview and apply are bound to the exact same single-use plan, with all-or-nothing rollback and guarded in-app undo.
 - Explicit local JSON and CSV scan-report export.
 - Native folder picker, reveal, path copy, stop, and keyboard shortcuts.
 - Power-user CLI for advice, maps, organise previews, duplicates, clean, undo, why, doctor, and watch.
@@ -115,6 +115,13 @@ JSON and Markdown reports include the transaction id and whether the result was
 planned, committed, or rolled back; CSV keeps stable move columns. Paths,
 categories, symlink components, and stale source/destination fingerprints are
 revalidated before anything is changed.
+
+The desktop Organize tab uses the same engine in its strongest mode. It hashes
+the proposed files, holds the reviewed plan only in the local app session, and
+applies it by an opaque single-use plan id. It never rebuilds a different plan
+after confirmation. The latest transaction appears with an Undo button only
+when its files still match the recorded post-apply fingerprints; a changed file
+disables undo and explains why.
 
 Built-in profiles are `standard`, `downloads`, and `minimal`. A custom rules
 file can expose named profiles with this shape:

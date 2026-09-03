@@ -18,6 +18,7 @@ let selected = null;
 let pollTimer = null;
 let view = "sun";
 let viewRoot = null;
+let activeOrganizePlan = null;
 const zoomStack = [];
 
 function apiFetch(url, options = {}) {
@@ -232,6 +233,7 @@ async function poll() {
 
 async function startScan(path) {
   if (!path) return;
+  activeOrganizePlan = null;
   showWorkspace();
   statusEl.textContent = "Starting scan…";
   document.querySelector("#progress").hidden = false;
@@ -447,47 +449,148 @@ document.querySelector('[data-tab="dupes"]').addEventListener("click", async () 
   });
 });
 
-document.querySelector('[data-tab="plan"]').addEventListener("click", async () => {
-  if (!scan) return;
-  document.querySelector("#tab-plan").innerHTML = "<p class='meta'>Planning…</p>";
-  const data = await apiFetch("/api/organize", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path: scan.root, recursive: false, magic: true, smart: true }),
-  }).then((r) => r.json());
+function organizePanel() {
+  return document.querySelector("#tab-plan");
+}
+
+async function refreshOrganizeStatus() {
+  const host = document.querySelector("#organize-history");
+  if (!host) return;
+  const data = await apiFetch("/api/organize/status").then((r) => r.json());
   if (!data.ok) {
-    document.querySelector("#tab-plan").textContent = data.error;
+    host.textContent = data.error || "Could not read organise history.";
     return;
   }
-  const files = (data.plan && data.plan.files) || [];
-  document.querySelector("#tab-plan").innerHTML =
-    `<p class="meta">${esc(data.plan.count)} files would move into category folders.</p>
-     <button class="btn" id="apply-plan" type="button">Apply organize</button>` +
+  const undo = data.undo;
+  if (!undo) {
+    host.innerHTML = "<p class='meta'>No organise transaction is available to undo for this folder.</p>";
+    return;
+  }
+  host.innerHTML = `<div class="transaction-card">
+    <div><strong>Latest transaction</strong><p class="meta">${esc(undo.count)} files · ${esc(undo.timestamp)} · id ${esc(undo.transaction_id.slice(0, 10))}</p></div>
+    <button class="btn ghost" id="undo-organize" type="button" ${undo.ready ? "" : "disabled"}>Undo organise</button>
+    ${undo.ready ? "" : `<p class="transaction-error">${esc(undo.error || "Undo is not currently safe.")}</p>`}
+  </div>`;
+  const undoButton = document.querySelector("#undo-organize");
+  if (!undoButton) return;
+  undoButton.addEventListener("click", async () => {
+    if (!confirm(`Undo transaction ${undo.transaction_id.slice(0, 10)} and restore ${undo.count} file(s) to their original paths?`)) return;
+    undoButton.disabled = true;
+    const result = await apiFetch("/api/organize/undo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transaction_id: undo.transaction_id }),
+    }).then((r) => r.json());
+    statusEl.textContent = result.ok
+      ? `Restored ${result.completed} files from transaction ${undo.transaction_id.slice(0, 10)}`
+      : result.error || "Undo failed safely.";
+    await refreshOrganizeStatus();
+    if (result.ok) startScan(pathInput.value.trim());
+  });
+}
+
+function renderOrganizePlan(plan) {
+  activeOrganizePlan = plan;
+  const preview = document.querySelector("#organize-preview");
+  if (!preview) return;
+  const files = plan.files || [];
+  const categoryText = Object.entries(plan.by_category || {})
+    .map(([category, count]) => `${esc(category)} ${esc(count)}`)
+    .join(" · ");
+  preview.innerHTML = `<div class="transaction-card ready">
+      <div>
+        <strong>Verified plan ${esc(plan.id.slice(0, 10))}</strong>
+        <p class="meta">${esc(plan.count)} files · ${esc(fmt(plan.total_bytes || 0))} · ${esc(plan.profile || "standard")} profile · SHA-256</p>
+        <p class="meta">${categoryText || "No matching files."}</p>
+      </div>
+      <button class="btn" id="apply-plan" type="button" ${plan.count ? "" : "disabled"}>Apply this exact plan</button>
+    </div>` +
     table(
-      files.slice(0, 40).map((f) => ({
-        name: f.source.split("/").pop(),
-        path: f.source,
-        category: f.category,
+      files.slice(0, 40).map((file) => ({
+        name: file.source.split(/[\\/]/).pop(),
+        path: file.source,
+        category: file.category,
       })),
       [
-        { label: "File", render: (r) => r.name },
-        { label: "Category", render: (r) => r.category },
+        { label: "File", render: (row) => row.name },
+        { label: "Category", render: (row) => row.category },
       ]
-    );
-  const apply = document.querySelector("#apply-plan");
-  if (apply) {
-    apply.addEventListener("click", async () => {
-      if (!confirm("Move files into category folders? Undo is available from the CLI.")) return;
-      const res = await apiFetch("/api/organize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: scan.root, recursive: false, apply: true }),
-      }).then((r) => r.json());
-      statusEl.textContent = res.ok ? `Moved ${res.moved} files` : res.error;
-      if (res.ok) startScan(pathInput.value.trim());
-    });
+    ) +
+    (files.length > 40 ? `<p class="meta">Showing 40 of ${esc(files.length)} planned moves.</p>` : "");
+  const applyButton = document.querySelector("#apply-plan");
+  if (!applyButton) return;
+  applyButton.addEventListener("click", async () => {
+    const current = activeOrganizePlan;
+    if (!current) return;
+    if (!confirm(`Apply verified plan ${current.id.slice(0, 10)} and move ${current.count} file(s)?\nIf anything changed since preview, nothing will move.`)) return;
+    applyButton.disabled = true;
+    applyButton.textContent = "Verifying…";
+    const result = await apiFetch("/api/organize/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plan_id: current.id }),
+    }).then((r) => r.json());
+    activeOrganizePlan = null;
+    statusEl.textContent = result.ok
+      ? `Moved ${result.completed} files · transaction ${result.transaction_id.slice(0, 10)}`
+      : result.error || "The plan was not applied.";
+    if (result.ok) {
+      preview.innerHTML = "<p class='meta'>Transaction committed. The exact move can be undone below.</p>";
+      await refreshOrganizeStatus();
+      startScan(pathInput.value.trim());
+    } else {
+      preview.innerHTML = `<p class="transaction-error">${esc(result.error || "Apply failed safely.")} Create a fresh plan before trying again.</p>`;
+    }
+  });
+}
+
+async function loadOrganizePanel() {
+  const panel = organizePanel();
+  if (!scan) {
+    panel.innerHTML = "<p class='meta'>Scan a folder before organising it.</p>";
+    return;
   }
-});
+  panel.innerHTML = `<div class="organize-controls">
+      <label>Folder layout <select id="organize-profile"></select></label>
+      <button class="btn" id="preview-organize" type="button">Create verified plan</button>
+      <p class="meta">Planning hashes file contents. Apply commits only this exact preview and rolls the whole batch back if any move fails.</p>
+    </div>
+    <div id="organize-preview"><p class="meta">Choose a layout, then create a plan. Nothing moves during preview.</p></div>
+    <div id="organize-history"></div>`;
+  const profiles = await apiFetch("/api/profiles").then((r) => r.json());
+  const select = document.querySelector("#organize-profile");
+  select.innerHTML = (profiles.profiles || [])
+    .map((profile) => `<option value="${esc(profile.name)}">${esc(profile.name)} — ${esc(profile.description)}</option>`)
+    .join("");
+  if (scan.root && /(^|[\\/])Downloads$/i.test(scan.root)) select.value = "downloads";
+  document.querySelector("#preview-organize").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = "Hashing…";
+    document.querySelector("#organize-preview").innerHTML = "<p class='meta'>Building content fingerprints…</p>";
+    const data = await apiFetch("/api/organize/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        path: scan.root,
+        profile: select.value,
+        recursive: false,
+        magic: true,
+        smart: true,
+      }),
+    }).then((r) => r.json());
+    button.disabled = false;
+    button.textContent = "Create verified plan";
+    if (!data.ok) {
+      document.querySelector("#organize-preview").innerHTML = `<p class="transaction-error">${esc(data.error || "Could not build plan.")}</p>`;
+      return;
+    }
+    renderOrganizePlan(data.plan);
+  });
+  await refreshOrganizeStatus();
+}
+
+document.querySelector('[data-tab="plan"]').addEventListener("click", loadOrganizePanel);
 
 async function exportReport(format) {
   if (!scan) {

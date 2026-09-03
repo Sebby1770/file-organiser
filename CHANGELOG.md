@@ -1,5 +1,21 @@
 # Changelog
 
+## 4.2.0 — verified desktop transactions
+
+### Desktop organiser
+
+- Bound preview and apply to one server-held, single-use plan id instead of
+  rescanning and generating different moves after confirmation.
+- Enabled SHA-256 source fingerprints for desktop plans and preserved hashes
+  in undo history so same-size content replacements fail closed.
+- Added Standard, Downloads, and Minimal layout selection to the desktop app.
+- Added transaction status and exact-id undo controls to the desktop app,
+  including preflight validation and clear disabled/error states.
+- Blocked scans and overlapping organise operations while a filesystem
+  transaction is active.
+- Added end-to-end local HTTP tests covering session authorization, stale-plan
+  rejection, exact apply, content-drift detection, and safe undo.
+
 ## 4.1.0 — commercial-launch candidate
 
 ### Desktop product

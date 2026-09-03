@@ -141,6 +141,47 @@ html, body { margin: 0; min-height: 100%; background: var(--ink); color: var(--p
 .vol, .waste { font-size: 13px; color: var(--muted); margin: 10px 0; }
 .waste strong { color: var(--gold); }
 .dupe { border-bottom: 1px solid var(--line); padding: 8px 0; }
+.organize-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.organize-controls label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.organize-controls select {
+  min-width: 320px;
+  max-width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  background: var(--ink);
+  color: var(--paper);
+  font: inherit;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.organize-controls > .meta { flex: 1 1 360px; margin: 0; }
+.transaction-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  margin: 10px 0;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+.transaction-card.ready { border-color: var(--gold); }
+.transaction-card p { margin: 4px 0 0; }
+.transaction-error { flex-basis: 100%; color: var(--danger); font-size: 12px; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; font-family: ui-monospace, Menlo, monospace; }
 td, th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 tr { cursor: pointer; }
