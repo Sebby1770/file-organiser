@@ -884,6 +884,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional profile-aware JSON config to inspect.",
     )
 
+    # --- audit ---
+    sp_audit = subparsers.add_parser(
+        "audit",
+        help="Score loose files, copy-like names, and overlapping rules.",
+        description=(
+            "Read a folder and report a clutter score. Lists files sitting in "
+            "the folder root, names that look like copies, and extensions that "
+            "belong to more than one category. Does not move or delete anything."
+        ),
+    )
+    _add_folder_arg(sp_audit)
+    _add_config_arg(sp_audit)
+    sp_audit.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the audit as JSON.",
+    )
+    sp_audit.add_argument(
+        "--preview",
+        action="store_true",
+        help="Include a dry-run tidy plan for loose files. Nothing is moved.",
+    )
+
     # --- doctor ---
     sp_doc = subparsers.add_parser(
         "doctor",
@@ -1056,6 +1079,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 serve_app(args.host, port or 8765, folder, open_browser=False)
                 return 0
             return run_desktop(host=args.host, port=port, folder=folder)
+
+        if args.command == "audit":
+            import json
+
+            from .audit import audit_folder, format_audit
+
+            folder = args.folder.expanduser().resolve()
+            if not folder.is_dir():
+                console.print(f"[red]Error:[/red] not a directory: {folder}")
+                return 1
+            rules = _resolve_rules(
+                args.config.expanduser().resolve() if args.config else None,
+                profile=getattr(args, "profile", None),
+            )
+            report = audit_folder(folder, rules, preview=bool(args.preview))
+            if args.json:
+                sys.stdout.write(json.dumps(report, indent=2) + "\n")
+            else:
+                console.print(format_audit(report))
+            return 0
 
         if args.command == "advise":
             from .advise import build_advice, format_advice

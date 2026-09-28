@@ -1,5 +1,23 @@
 # Changelog
 
+## 4.4.0 — tidy preview
+
+### Dry-run tidy
+
+- `file-organiser audit --preview` and the desktop Clutter tab list where loose, categorised files would move.
+- The preview uses the same root-only plan as organise and does not create folders or move files.
+- Loose files older than 180 days lower the clutter score by up to 10 points.
+
+## 4.3.0 — clutter audit
+
+### Read-only audit
+
+- Added `file-organiser audit` and a desktop Clutter tab.
+- Scores loose files in the folder root, copy-like names (`Report (1)`, `Report copy`, `Report final`), empty files, and how many files fall through to Other.
+- Reports extensions that the active rules assign to more than one category. The first category still wins; the audit only makes the clash visible.
+- The walk skips hidden names, cache directories, and symlinks. It does not move or delete anything.
+- The desktop route audits only the folder already scanned in that session.
+
 ## 4.2.0 — verified desktop transactions
 
 ### Desktop organiser

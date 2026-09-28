@@ -59,6 +59,7 @@ Do **not** run `pip install file-organizer`: that US-spelled PyPI name belongs t
 - Per-launch API token, loopback Host enforcement, exact-Origin checks, restrictive browser headers, and JSON-only mutations.
 - Duplicate hashing with an explicit keeper and immediate pre-action revalidation.
 - Content-fingerprinted desktop organisation: preview and apply are bound to the exact same single-use plan, with all-or-nothing rollback and guarded in-app undo.
+- Read-only clutter audit: loose files, copy-like names, stale loose files, and category rules that claim the same extension. `audit --preview` and the desktop Clutter tab add a dry-run tidy list. Nothing is moved.
 - Explicit local JSON and CSV scan-report export.
 - Native folder picker, reveal, path copy, stop, and keyboard shortcuts.
 - Power-user CLI for advice, maps, organise previews, duplicates, clean, undo, why, doctor, and watch.
@@ -77,6 +78,8 @@ Common explicit commands:
 
 ```bash
 python3 -m file_organiser advise ~/Downloads
+python3 -m file_organiser audit ~/Downloads
+python3 -m file_organiser audit ~/Downloads --preview
 python3 -m file_organiser map ~/Downloads
 python3 -m file_organiser preview ~/Downloads
 python3 -m file_organiser duplicates ~/Downloads

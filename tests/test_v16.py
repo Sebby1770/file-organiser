@@ -22,10 +22,10 @@ def test_main_no_args_opens_app(monkeypatch):
     assert called.get("app") is True
 
 
-def test_version_420():
+def test_version_430():
     from file_organiser import __version__
 
-    assert __version__ == "4.2.0"
+    assert __version__ == "4.4.0"
 
 
 def test_node_modules_is_delete(tmp_path: Path):

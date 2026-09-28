@@ -288,4 +288,4 @@ def test_cli_bench(tmp_path: Path):
 def test_version_is_400():
     from file_organiser import __version__
 
-    assert __version__ == "4.2.0"
+    assert __version__ == "4.4.0"

@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import __version__
 from .advise import build_advice, is_protected, is_safe_delete
+from .audit import audit_folder
 from .disk import candidate_roots, prune_tree, scan_usage, text_map
 from .duplicates import choose_keeper, file_sha256, find_duplicates, reclaimable_bytes
 from .explain import explain_path
@@ -363,6 +364,7 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                 "/api/dupes",
                 "/api/dupes/purge",
                 "/api/advise/purge",
+                "/api/audit",
             }
             if route in exclusive_routes:
                 if not STATE.mutation_lock.acquire(blocking=False):
@@ -425,6 +427,9 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                 return
             if route == "/api/advise/purge":
                 self._json(self._purge_advice(body))
+                return
+            if route == "/api/audit":
+                self._json(_audit_body(body))
                 return
             self._json({"error": "not found"}, 404)
 
@@ -925,6 +930,33 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
 
 def launch(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = None) -> None:
     serve_app(host, port, folder, open_browser=True)
+
+
+def _audit_body(body: dict[str, Any]) -> dict[str, Any]:
+    """Read-only clutter audit of the folder already scanned in this session."""
+    raw = str(body.get("path") or "").strip()
+    if not raw:
+        return {"ok": False, "error": "path required"}
+    folder = Path(raw).expanduser()
+    try:
+        folder = folder.resolve()
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    if not folder.is_dir():
+        return {"ok": False, "error": "not a directory"}
+    with STATE.lock:
+        root = STATE.root
+        busy = STATE.organize_busy
+    if root is None:
+        return {"ok": False, "error": "scan a folder first"}
+    if busy:
+        return {"ok": False, "error": "wait for the organise transaction to finish"}
+    try:
+        folder.relative_to(root)
+    except ValueError:
+        return {"ok": False, "error": "folder is outside the scanned root"}
+    report = audit_folder(folder, load_rules(None), preview=bool(body.get("preview")))
+    return {"ok": True, "audit": report}
 
 
 def map_text(folder: Path) -> str:

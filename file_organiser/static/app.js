@@ -411,6 +411,50 @@ document.querySelector("#tabs").addEventListener("click", (event) => {
   document.querySelectorAll(".tab").forEach((el) => el.classList.toggle("on", el.id === "tab-" + btn.dataset.tab));
 });
 
+document.querySelector('[data-tab="clutter"]').addEventListener("click", async () => {
+  if (!scan) return;
+  const box = document.querySelector("#tab-clutter");
+  box.innerHTML = "<p class='meta'>Reading names…</p>";
+  const data = await apiFetch("/api/audit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: scan.root, preview: true }),
+  }).then((r) => r.json());
+  if (!data.ok) {
+    box.textContent = data.error || "Audit failed";
+    return;
+  }
+  const audit = data.audit;
+  const loose = (audit.loose || [])
+    .map((item) => `<li>${esc(item.rel)} <span class="meta">${esc(item.category)}</span></li>`)
+    .join("");
+  const twins = (audit.twins || [])
+    .map((group) => {
+      const names = group.files.map((item) => esc(item.rel)).join(", ");
+      return `<li>${esc(group.count)}× ${esc(group.stem + group.suffix)} — ${names}</li>`;
+    })
+    .join("");
+  const clashes = (audit.conflicts || [])
+    .map((clash) => `<li>${esc(clash.extension)} → ${esc(clash.categories.join(", "))}</li>`)
+    .join("");
+  const preview = (audit.preview || [])
+    .map((item) => `<li>${esc(item.name)} → ${esc(item.rel_dest)}</li>`)
+    .join("");
+  box.innerHTML = `
+    <p><strong>${esc(audit.score)}/100 ${esc(audit.grade)}</strong></p>
+    <p class="meta">${esc(audit.headline)}</p>
+    <p class="meta">${esc(audit.movable_count)} loose file(s) already match a category. The tidy list is a preview; this tab does not move files.</p>
+    <p>Loose</p>
+    <ul>${loose || "<li>None</li>"}</ul>
+    <p>Copy-like names</p>
+    <ul>${twins || "<li>None</li>"}</ul>
+    <p>Rule overlaps</p>
+    <ul>${clashes || "<li>None</li>"}</ul>
+    <p>Tidy preview</p>
+    <ul>${preview || "<li>None</li>"}</ul>
+  `;
+});
+
 document.querySelector('[data-tab="dupes"]').addEventListener("click", async () => {
   if (!scan) return;
   document.querySelector("#tab-dupes").innerHTML = "<p class='meta'>Hashing…</p>";
