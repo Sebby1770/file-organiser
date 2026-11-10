@@ -285,8 +285,8 @@ def build_advice(result: dict[str, Any] | None, *, dupe_extras: Iterable[str] | 
             _item(
                 path,
                 size=0,
-                bucket="delete",
-                reason="Empty file. Nothing in it.",
+                bucket="review",
+                reason="Empty file. It may be a marker used by an app or project.",
                 kind="empty",
                 confidence="high",
             )
@@ -350,8 +350,8 @@ def build_advice(result: dict[str, Any] | None, *, dupe_extras: Iterable[str] | 
             _item(
                 str(empty_dir),
                 size=0,
-                bucket="delete",
-                reason="Empty folder.",
+                bucket="review",
+                reason="Empty folder. Check whether its location is part of a project.",
                 kind="empty",
                 confidence="high",
                 extra={"dir": True},
@@ -455,7 +455,13 @@ def build_advice(result: dict[str, Any] | None, *, dupe_extras: Iterable[str] | 
     review = review[:_MAX_BUCKET]
     keep = keep[:_MAX_BUCKET]
 
-    delete_bytes = sum(int(r["size"]) for r in delete)
+    # Junk files can also be listed inside a suggested cache directory.
+    # Keep both choices while counting the same bytes only once.
+    directories = {Path(row["path"]) for row in delete if row["dir"]}
+    delete_bytes = sum(
+        row["size"] for row in delete
+        if directories.isdisjoint(Path(row["path"]).parents)
+    )
     review_bytes = sum(int(r["size"]) for r in review)
     keep_bytes = sum(int(r["size"]) for r in keep)
     headline = _headline(delete_bytes, review_bytes, keep_bytes, len(delete), len(review))
@@ -480,14 +486,14 @@ def build_advice(result: dict[str, Any] | None, *, dupe_extras: Iterable[str] | 
 
 
 def _headline(delete_b: int, review_b: int, keep_b: int, delete_n: int, review_n: int) -> str:
-    if delete_b == 0 and review_b == 0:
+    if delete_n == 0 and review_n == 0:
         return "This looks tidy. Nothing obvious to throw away."
-    if delete_b and review_b:
+    if delete_n and review_n:
         return (
             f"Safe to delete about {format_size(delete_b)} "
             f"({delete_n} items). Check {format_size(review_b)} more before you touch it."
         )
-    if delete_b:
+    if delete_n:
         return f"Safe to delete about {format_size(delete_b)} across {delete_n} items. We will not trash your photos or documents."
     return f"Nothing is an obvious delete. {format_size(review_b)} is worth a look ({review_n} items)."
 
@@ -524,12 +530,13 @@ def is_safe_delete(path: Path, advice: dict[str, Any] | None = None) -> tuple[bo
         return False, "protected path"
     if advice:
         for row in advice.get("delete") or []:
-            try:
-                if Path(row["path"]).resolve() == path:
-                    return True, "advised delete"
-            except OSError:
-                if row.get("path") == str(path):
-                    return True, "advised delete"
+            # Scan rows store canonical paths. Resolving a row again could
+            # authorise a symlink's new target after the scan.
+            if Path(row["path"]) != path:
+                continue
+            if "dir" in row and bool(row["dir"]) != path.is_dir():
+                return False, "item type changed since scan"
+            return True, "advised delete"
         return False, "not on the delete list"
     bucket, _reason, kind = classify_path(path, is_dir=path.is_dir())
     if bucket == "delete" and kind in {"cache", "junk", "empty", "installer"}:

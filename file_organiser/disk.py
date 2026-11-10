@@ -5,6 +5,7 @@ from __future__ import annotations
 import heapq
 import os
 import shutil
+import stat
 import sys
 import time
 from collections import defaultdict
@@ -49,6 +50,19 @@ _MAX_EMPTY = 50
 _MAX_HINTS = 80
 _FAN = 20
 _DEPTH = 3
+
+
+class ScanCancelled(Exception):
+    """The caller stopped the scan before a complete result was available."""
+
+
+def _check_cancel(cancel: Callable[[], bool] | None) -> None:
+    if cancel and cancel():
+        raise ScanCancelled("Scan stopped")
+
+
+def _junk(name: str) -> bool:
+    return name.endswith(".pyc") or matches_junk_name(name, DEFAULT_JUNK_PATTERNS)
 
 
 @dataclass
@@ -160,6 +174,9 @@ def scan_usage(
     cat_files: dict[str, int] = defaultdict(int)
     cache_bytes = 0
     cache_files = 0
+    stale_bytes = 0
+    stale_cache_bytes = 0
+    empty_dir_count = 0
     empty_dirs: list[str] = []
     junk_rows: list[dict[str, Any]] = []
     empty_files: list[dict[str, Any]] = []
@@ -169,10 +186,17 @@ def scan_usage(
     now = time.time()
     stale_age = stale_days * 86400
 
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        if cancel and cancel():
-            break
+    def count_error(error: OSError) -> None:
+        nonlocal errors
+        if error.filename == str(root):
+            raise error
+        errors += 1
+
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False, onerror=count_error):
+        _check_cancel(cancel)
+        physically_empty = not dirnames and not filenames
         current = Path(dirpath)
+        dir_size.setdefault(current, 0)
         keep: list[str] = []
         for name in dirnames:
             if skip_hidden and name.startswith(".") and name not in CACHE_DIR_NAMES:
@@ -181,28 +205,28 @@ def scan_usage(
                 continue
             keep.append(name)
         dirnames[:] = keep
-        dir_had_file = False
         for name in filenames:
-            is_junk = matches_junk_name(name, DEFAULT_JUNK_PATTERNS) or name.endswith(".pyc")
+            _check_cancel(cancel)
+            is_junk = _junk(name)
             if skip_hidden and name.startswith(".") and not is_junk:
                 continue
             path = current / name
             try:
-                st = path.stat()
+                st = path.lstat()
             except OSError:
                 errors += 1
                 continue
-            if not os.path.isfile(path) or os.path.islink(path):
+            if not stat.S_ISREG(st.st_mode):
                 continue
             size = int(st.st_size)
             mtime = float(st.st_mtime)
             visited += 1
-            dir_had_file = True
             _add_size(dir_size, dir_files, path, root, size)
             cat = category_for_path(path, rules, use_smart=True)
             cat_size[cat] += size
             cat_files[cat] += 1
-            if _is_cache_path(path, root):
+            in_cache = _is_cache_path(path, root)
+            if in_cache:
                 cache_bytes += size
                 cache_files += 1
             if is_junk and len(junk_rows) < _MAX_HINTS:
@@ -234,22 +258,24 @@ def scan_usage(
             elif size > largest[0][0]:
                 heapq.heapreplace(largest, item)
             if size >= stale_min_bytes and (now - mtime) >= stale_age:
+                stale_bytes += size
+                if in_cache:
+                    stale_cache_bytes += size
                 if len(stale) < _MAX_STALE:
                     heapq.heappush(stale, item)
                 elif size > stale[0][0]:
                     heapq.heapreplace(stale, item)
             if progress and visited % 250 == 0:
                 progress(visited, dir_size[root])
-        if not dir_had_file and not dirnames and current != root:
-            empty_dirs.append(str(current))
-            if len(empty_dirs) > _MAX_EMPTY * 4:
-                empty_dirs = empty_dirs[:_MAX_EMPTY]
+        if physically_empty and current != root:
+            empty_dir_count += 1
+            if len(empty_dirs) < _MAX_EMPTY:
+                empty_dirs.append(str(current))
 
     total = dir_size.get(root, 0)
-    tree = prune_tree(root, dir_size, dir_files, depth=0, rules=rules)
+    tree = prune_tree(root, dir_size, dir_files, depth=0, rules=rules, skip_hidden=skip_hidden, cancel=cancel)
     stale_rows = _heap_rows(stale)
-    stale_bytes = sum(row["size"] for row in stale_rows)
-    waste = cache_bytes + stale_bytes
+    waste = cache_bytes + stale_bytes - stale_cache_bytes
     categories = [
         {"category": k, "size": v, "files": cat_files[k], "label": format_size(v)}
         for k, v in sorted(cat_size.items(), key=lambda kv: -kv[1])
@@ -257,6 +283,7 @@ def scan_usage(
     cache_dirs = _outermost_cache_dirs(dir_size, dir_files, root)
     result = {
         "root": str(root),
+        "separator": os.sep,
         "name": root.name or str(root),
         "size": total,
         "label": format_size(total),
@@ -280,7 +307,7 @@ def scan_usage(
             "cache_files": cache_files,
             "stale": stale_bytes,
             "stale_label": format_size(stale_bytes),
-            "empty": len(empty_dirs[:_MAX_EMPTY]),
+            "empty": empty_dir_count,
             "total": waste,
             "total_label": format_size(waste),
         },
@@ -295,7 +322,7 @@ def _outermost_cache_dirs(
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for path, size in dir_size.items():
-        if path == root or path.name not in CACHE_DIR_NAMES:
+        if path == root or path.name not in CACHE_DIR_NAMES or not dir_files.get(path):
             continue
         nested = False
         parent = path.parent
@@ -329,7 +356,11 @@ def prune_tree(
     fan: int = _FAN,
     max_depth: int = _DEPTH,
     rules: dict[str, list[str]] | None = None,
+    *,
+    skip_hidden: bool = True,
+    cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
+    _check_cancel(cancel)
     rules = rules or load_rules(None)
     node: dict[str, Any] = {
         "name": path.name or str(path),
@@ -345,6 +376,7 @@ def prune_tree(
     try:
         with os.scandir(path) as it:
             for entry in it:
+                _check_cancel(cancel)
                 if entry.name in SKIP_DIR_NAMES:
                     continue
                 try:
@@ -353,10 +385,16 @@ def prune_tree(
                     is_dir = entry.is_dir(follow_symlinks=False)
                     if is_dir:
                         child_path = Path(entry.path)
-                        kids.append(
-                            prune_tree(child_path, dir_size, dir_files, depth + 1, fan, max_depth, rules)
-                        )
+                        if child_path not in dir_size:
+                            continue
+                        kids.append({
+                            "name": entry.name, "path": entry.path, "dir": True,
+                            "size": dir_size[child_path], "files": dir_files.get(child_path, 0),
+                            "children": [],
+                        })
                     elif entry.is_file(follow_symlinks=False):
+                        if skip_hidden and entry.name.startswith(".") and not _junk(entry.name):
+                            continue
                         st = entry.stat(follow_symlinks=False)
                         kids.append(
                             {
@@ -374,7 +412,13 @@ def prune_tree(
     except OSError:
         return node
     kids.sort(key=lambda k: -int(k.get("size") or 0))
-    top = kids[:fan]
+    # Only descend into directories which will actually appear on the map.
+    top = [
+        prune_tree(Path(child["path"]), dir_size, dir_files, depth + 1, fan, max_depth, rules,
+                   skip_hidden=skip_hidden, cancel=cancel)
+        if child["dir"] else child
+        for child in kids[:fan]
+    ]
     rest = kids[fan:]
     if rest:
         top.append(

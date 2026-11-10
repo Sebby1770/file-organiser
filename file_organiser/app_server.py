@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, urlparse
 from . import __version__
 from .advise import build_advice, is_protected, is_safe_delete
 from .audit import audit_folder
-from .disk import candidate_roots, prune_tree, scan_usage, text_map
+from .disk import ScanCancelled, candidate_roots, prune_tree, scan_usage, text_map
 from .duplicates import choose_keeper, file_sha256, find_duplicates, reclaimable_bytes
 from .explain import explain_path
 from .history import HistoryManager
@@ -137,8 +137,15 @@ def _host_header_loopback(host_header: str) -> bool:
 
 def _safe_desktop_delete(path: Path, advice: dict[str, Any] | None) -> tuple[bool, str]:
     """Central deletion policy shared by every desktop-app delete route."""
+    try:
+        if path != path.resolve(strict=True):
+            return False, "item path changed since scan"
+    except (OSError, RuntimeError):
+        return False, "item is missing or cannot be resolved"
     if is_protected(path) or dangerous_target(path):
         return False, "protected items are locked"
+    if not advice:
+        return False, "complete a scan first"
     safe, reason = is_safe_delete(path, advice)
     if not safe:
         return False, reason or "only items in Delete can be trashed here"
@@ -389,8 +396,11 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
             body: dict[str, Any],
         ) -> None:
             with STATE.lock:
-                scan_running = STATE.status == "running"
-            if scan_running and route != "/api/scan":
+                scan_status = STATE.status
+            if scan_status in {"cancelled", "error"} and route != "/api/scan":
+                self._json({"ok": False, "error": "complete a new scan first"}, 409)
+                return
+            if scan_status == "running" and route != "/api/scan":
                 self._json(
                     {"ok": False, "error": "wait for the scan to finish"},
                     409,
@@ -459,7 +469,7 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                 return
             if route == "/api/cancel":
                 with STATE.lock:
-                    STATE.cancel = True
+                    STATE.cancel = STATE.status == "running"
                 self._json({"ok": True})
                 return
             if route == "/api/advise":
@@ -519,12 +529,17 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                     )
                     advice = build_advice(result)
                     with STATE.lock:
+                        if STATE.cancel:
+                            raise ScanCancelled("Scan stopped")
                         STATE.result = result
                         STATE.maps = maps
                         STATE.advice = advice
                         STATE.status = "done"
                         STATE.visited = result["visited"]
                         STATE.bytes = result["size"]
+                except ScanCancelled:
+                    with STATE.lock:
+                        STATE.status = "cancelled"
                 except Exception as exc:  # noqa: BLE001
                     with STATE.lock:
                         STATE.status = "error"
@@ -535,17 +550,11 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
 
         def _do_trash(self, body: dict[str, Any]) -> dict[str, Any]:
             target = Path(str(body.get("path") or "")).expanduser()
-            try:
-                target = target.resolve()
-            except OSError as exc:
-                return {"ok": False, "error": str(exc)}
-            if not STATE.allowed(target):
-                return {"ok": False, "error": "path is outside the scanned folder"}
             safe, reason = _safe_desktop_delete(target, STATE.advice)
             if not safe:
                 return {"ok": False, "error": reason}
-            if not target.exists():
-                return {"ok": False, "error": "already gone"}
+            if not STATE.allowed(target):
+                return {"ok": False, "error": "path is outside the scanned folder"}
             try:
                 action = _trash(target)
             except OSError as exc:
@@ -740,9 +749,11 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
 
         def _zoom(self, body: dict[str, Any]) -> dict[str, Any]:
             target = Path(str(body.get("path") or "")).expanduser()
-            if not STATE.maps or not STATE.allowed(target) or not target.is_dir():
+            with STATE.lock:
+                maps = STATE.maps
+            if not maps or target not in maps.dir_size or not STATE.allowed(target) or not target.is_dir():
                 return {"ok": False, "error": "scan this folder first"}
-            tree = prune_tree(target, STATE.maps.dir_size, STATE.maps.dir_files, depth=0, rules=STATE.rules)
+            tree = prune_tree(target, maps.dir_size, maps.dir_files, depth=0, rules=STATE.rules)
             tree["label"] = format_size(int(tree.get("size") or 0))
             return {"ok": True, "tree": tree}
 
@@ -755,23 +766,13 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
             with STATE.lock:
                 advice = STATE.advice
             for raw in paths:
-                try:
-                    target = raw.expanduser().resolve()
-                except OSError as exc:
-                    skipped.append({"path": str(raw), "error": str(exc)})
-                    continue
-                if not STATE.allowed(target):
-                    skipped.append({"path": str(target), "error": "outside the scanned folder"})
-                    continue
-                if is_protected(target) or dangerous_target(target):
-                    skipped.append({"path": str(target), "error": "protected"})
-                    continue
-                ok, why = is_safe_delete(target, advice)
+                target = raw.expanduser()
+                ok, why = _safe_desktop_delete(target, advice)
                 if not ok:
                     skipped.append({"path": str(target), "error": why})
                     continue
-                if not target.exists():
-                    skipped.append({"path": str(target), "error": "already gone"})
+                if not STATE.allowed(target):
+                    skipped.append({"path": str(target), "error": "outside the scanned folder"})
                     continue
                 try:
                     done.append({"path": str(target), "action": _trash(target)})
