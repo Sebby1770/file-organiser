@@ -829,7 +829,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "With --delete-dupes, move duplicates to the OS trash "
             "(requires: pip install file-organiser[trash]). "
-            "Falls back to permanent delete with a warning if unavailable."
+            "Stops if Trash is unavailable."
         ),
     )
     sp_dup.add_argument(
@@ -1469,7 +1469,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         parser.print_help()
         return 1
 
-    except FileNotFoundError as e:
+    except OSError as e:
         console.print(f"[red]Error:[/red] {e}")
         return 1
     except ValueError as e:

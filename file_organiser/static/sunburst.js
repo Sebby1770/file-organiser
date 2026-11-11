@@ -1,4 +1,4 @@
-const PALETTE = ["#d4a054", "#7eb8d4", "#c47aff", "#6ee7b7", "#e07a6a", "#f0c36d", "#8ab4f8", "#f6a6ff", "#9ad0b4", "#ffb38a"];
+const PALETTE = ["#e4ab7e", "#93b5bd", "#b3c69a", "#84b5a6", "#d5927e", "#e0c488", "#9baec6", "#c1aac2", "#b3c2a3", "#e3b18d"];
 const CAT_COLOR = {
   Images: "#e8a54b",
   Documents: "#7eb8d4",
@@ -32,7 +32,7 @@ function layoutSunburst(tree) {
     });
     const kids = node.children || [];
     let a = start;
-    const parentSize = Math.max(1, node.size || 1);
+    const parentSize = Math.max(1, node.size || 1, kids.reduce((sum, kid) => sum + kid.size, 0));
     kids.forEach((kid, i) => {
       const childSpan = span * ((kid.size || 0) / parentSize);
       walk(kid, depth + 1, a, childSpan, i);
@@ -85,26 +85,63 @@ function drawTreemap(canvas, tree, highlightPath) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (!tree) return [];
   const hits = [];
-  const kids = (tree.children && tree.children.length ? tree.children : [tree]).slice();
-  const total = Math.max(1, kids.reduce((s, k) => s + (k.size || 0), 0));
-  let x = 8;
-  const y = 8;
-  const h = canvas.height - 16;
-  const innerW = canvas.width - 16;
-  kids.forEach((kid, i) => {
-    const w = Math.max(2, innerW * ((kid.size || 0) / total));
-    ctx.fillStyle = kid.other ? "#3a4150" : colorFor(kid.name, i, kid.category);
-    ctx.globalAlpha = highlightPath === kid.path ? 1 : 0.9;
-    ctx.fillRect(x, y, w - 2, h);
-    ctx.globalAlpha = 1;
-    if (w > 48) {
-      ctx.fillStyle = "#0c0e12";
-      ctx.font = "12px system-ui";
-      ctx.fillText(String(kid.name).slice(0, Math.floor(w / 8)), x + 6, y + 20);
+  const nodes = (tree.children?.length ? tree.children : [tree])
+    .filter((node) => node.size > 0)
+    .sort((a, b) => b.size - a.size);
+
+  // Split near half the byte total along the longest side. Each leaf keeps
+  // its exact area share while small siblings get usable, two-dimensional tiles.
+  function tile(group, x, y, w, h) {
+    if (!group.length) return;
+    if (group.length === 1) {
+      hits.push({ node: group[0], x, y, w, h });
+      return;
     }
-    hits.push({ node: kid, x, y, w: w - 2, h });
-    x += w;
+    const total = group.reduce((sum, node) => sum + node.size, 0);
+    let cut = 1;
+    let weight = group[0].size;
+    while (cut < group.length - 1 && Math.abs(total / 2 - weight - group[cut].size) < Math.abs(total / 2 - weight)) {
+      weight += group[cut++].size;
+    }
+    const share = weight / total;
+    if (w >= h) {
+      tile(group.slice(0, cut), x, y, w * share, h);
+      tile(group.slice(cut), x + w * share, y, w * (1 - share), h);
+    } else {
+      tile(group.slice(0, cut), x, y, w, h * share);
+      tile(group.slice(cut), x, y + h * share, w, h * (1 - share));
+    }
+  }
+  tile(nodes, 8, 8, canvas.width - 16, canvas.height - 16);
+  hits.forEach(({ node, x, y, w, h }, index) => {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+    ctx.textAlign = "start";
+    ctx.fillStyle = node.other ? "#9da69a" : colorFor(node.name, index, node.category);
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = highlightPath && highlightPath === node.path ? "#fff" : "#25352b";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x, y, w, h);
+    if (w > 64 && h > 38) {
+      ctx.fillStyle = "#172018";
+      ctx.font = "600 20px system-ui";
+      ctx.fillText(node.name, x + 8, y + 25);
+      if (h > 65) {
+        ctx.font = "16px system-ui";
+        ctx.fillText(fmt(node.size), x + 8, y + 49);
+      }
+    }
+    ctx.restore();
   });
+  if (!nodes.length) {
+    ctx.fillStyle = "#d9e4d4";
+    ctx.font = "20px system-ui";
+    ctx.textAlign = "center";
+    ctx.fillText("No file data to map", canvas.width / 2, canvas.height / 2);
+    ctx.textAlign = "start";
+  }
   return hits;
 }
 

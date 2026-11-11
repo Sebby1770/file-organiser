@@ -44,9 +44,9 @@ Do **not** run `pip install file-organizer`: that US-spelled PyPI name belongs t
 ## Desktop workflow
 
 1. Choose Downloads, your home folder, or another folder.
-2. Read the reason on every Delete / Review / Keep row.
-3. Use the map and inspector to understand space, not as an automatic deletion score.
-4. Select only Delete rows you recognise and confirm the OS Trash move.
+2. Check the folder overview for scanned size, file count, free space, and unreadable items. Stopping a scan discards its partial results.
+3. Explore the map by clicking segments or by opening **Folder contents** with the keyboard.
+4. Search the advice board by name, path, or reason and sort by size or name. Delete starts with nothing selected. Review the complete list of selected paths before confirming the move to Trash.
 5. Verify Trash before emptying it. Emptying Trash is a separate and potentially irreversible action.
 
 “Scan my home folder” means readable home-folder content, not a raw whole-disk scan. Most hidden personal directories are skipped; recognised cache directories are included. Permission errors and files changing during a scan can make totals incomplete.
@@ -57,7 +57,7 @@ Do **not** run `pip install file-organizer`: that US-spelled PyPI name belongs t
 - Explainable Delete / Review / Keep advice.
 - Protected-path locks enforced by the local server.
 - Per-launch API token, loopback Host enforcement, exact-Origin checks, restrictive browser headers, and JSON-only mutations.
-- Duplicate hashing with an explicit keeper and immediate pre-action revalidation.
+- Duplicate comparison by content, with relative paths, a selectable keeper, and individual Trash selections. Choose a minimum size under **File tools → Duplicates**, then click **Find duplicates**. Hard-linked paths count as one copy. Only Delete-list files with a single hard link can be selected. Desktop searches leave no hash cache in the scanned folder.
 - Content-fingerprinted desktop organisation: preview and apply are bound to the exact same single-use plan, with all-or-nothing rollback and guarded in-app undo.
 - Read-only clutter audit: loose files, copy-like names, stale loose files, and category rules that claim the same extension. `audit --preview` and the desktop Clutter tab add a dry-run tidy list. Nothing is moved.
 - Explicit local JSON and CSV scan-report export.
@@ -86,7 +86,7 @@ python3 -m file_organiser duplicates ~/Downloads
 python3 -m file_organiser doctor
 ```
 
-Dry-run is the default for destructive CLI workflows. CLI flags can expose actions beyond the guarded desktop interface; read `--help` before applying them.
+For duplicate cleanup, preview explicitly with `duplicates FOLDER --delete-dupes --trash --dry-run`. Removing `--dry-run` requests OS Trash and returns an error if Trash is unavailable. The command rechecks file contents before removal and preserves files with multiple hard links. CLI flags can expose actions beyond the guarded desktop interface; read `--help` before applying them.
 
 ## Safe transaction workflow
 
@@ -121,7 +121,7 @@ revalidated before anything is changed.
 
 The desktop Organize tab uses the same engine in its strongest mode. It hashes
 the proposed files, holds the reviewed plan only in the local app session, and
-applies it by an opaque single-use plan id. It never rebuilds a different plan
+applies it by an opaque single-use plan id. The preview shows both the current location and destination for every move, with paging for larger plans. It never rebuilds a different plan
 after confirmation. The latest transaction appears with an Undo button only
 when its files still match the recorded post-apply fingerprints; a changed file
 disables undo and explains why.
