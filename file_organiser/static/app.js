@@ -508,49 +508,7 @@ document.querySelector('[data-tab="clutter"]').addEventListener("click", async (
   `;
 });
 
-document.querySelector('[data-tab="dupes"]').addEventListener("click", async () => {
-  if (!scan) return;
-  document.querySelector("#tab-dupes").innerHTML = "<p class='meta'>Hashing…</p>";
-  const duplicateScan = scan;
-  const data = await apiFetch("/api/dupes", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path: scan.root, min_size: 256000 }),
-  }).then((r) => r.json());
-  if (scan !== duplicateScan) return;
-  if (!data.ok) {
-    document.querySelector("#tab-dupes").textContent = data.error;
-    return;
-  }
-  const groups = data.groups || [];
-  if (!groups.length) {
-    byId("tab-dupes").textContent = "No duplicates found at or above 256 KB.";
-    return;
-  }
-  const html =
-    `<p class="meta">Potentially reclaimable ${esc(data.reclaim_label)} across ${esc(data.extra_files)} extra copies. Every file is re-hashed before Trash.</p>` +
-    groups
-      .map(
-        (g) =>
-          `<div class="dupe"><p><strong>${esc(g.count)}×</strong> keep ${esc(g.files.find((file) => file.path === g.keep)?.name || g.keep)}</p>
-           <button class="btn danger" data-group="${esc(g.group)}" data-keep="${esc(g.keep)}">Trash safe extras</button>
-           <p class="meta">${g.files.map((f) => esc(f.name + " " + f.label)).join(" · ")}</p></div>`
-      )
-      .join("");
-  byId("tab-dupes").innerHTML = html;
-  document.querySelectorAll("#tab-dupes [data-group]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      if (!confirm("Move duplicate extras to Trash only if they are also on the Delete list? Files are re-checked first.")) return;
-      const res = await apiFetch("/api/dupes/purge", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ keep: btn.dataset.keep, group: btn.dataset.group }),
-      }).then((r) => r.json());
-      statusEl.textContent = res.ok ? `Trashed ${res.n} extras` : res.error;
-      if (res.ok) startScan(scan?.root, statusEl.textContent + ". ");
-    });
-  });
-});
+document.querySelector('[data-tab="dupes"]').addEventListener("click", openDuplicateReview);
 
 function organizePanel() {
   return document.querySelector("#tab-plan");

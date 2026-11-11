@@ -63,9 +63,10 @@ function updateSelection() {
     : "Nothing selected";
 }
 
-function reviewTrash(items) {
+function reviewTrash(items, keeper = "") {
   const dialog = byId("trash-dialog");
   byId("trash-summary").textContent = `Review all ${items.length} selected items before moving them to the operating system Trash.`;
+  if (keeper) byId("trash-summary").textContent += ` The copy at ${keeper} will be kept.`;
   byId("trash-paths").replaceChildren(...items.map((item) => {
     const li = document.createElement("li");
     li.textContent = item.path;

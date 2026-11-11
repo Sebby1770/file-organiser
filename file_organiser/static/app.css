@@ -174,3 +174,14 @@ dialog .meta { margin: 10px 0; }
   .board, .dock { margin-top: 28px; }
 }
 @media (prefers-reduced-motion: reduce) { .progress i { animation: none; } }
+
+.duplicate-search, .duplicate-actions { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
+.duplicate-search label, .duplicate-filter { display: grid; gap: 4px; font-size: 12px; font-weight: 550; }
+.duplicate-filter { margin: 18px 0 10px; max-width: 32rem; }
+.duplicate-group h3 { margin: 16px 0 4px; overflow-wrap: anywhere; }
+.duplicate-files { margin: 12px 0; table-layout: fixed; }
+.duplicate-files small { display: block; color: var(--muted); font-size: 11px; }
+.duplicate-files .link-btn { padding: 0; }
+.duplicate-files th:not(:first-child), .duplicate-files td:not(:first-child) { text-align: center; width: 56px; }
+.duplicate-files input { width: 17px; height: 17px; accent-color: var(--green); }
+.duplicate-actions { align-items: center; }

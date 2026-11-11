@@ -20,7 +20,7 @@ from . import __version__
 from .advise import build_advice, is_protected, is_safe_delete
 from .audit import audit_folder
 from .disk import ScanCancelled, candidate_roots, prune_tree, scan_usage, text_map
-from .duplicates import choose_keeper, file_sha256, find_duplicates, reclaimable_bytes
+from .duplicate_review import DuplicateReview
 from .explain import explain_path
 from .history import HistoryManager
 from .organizer import build_preview_plan
@@ -45,7 +45,7 @@ class AppState:
         self.cancel = False
         self.maps = None
         self.advice: dict[str, Any] | None = None
-        self.duplicate_groups: dict[str, tuple[str, tuple[Path, ...]]] = {}
+        self.duplicate_review = DuplicateReview()
         # Organise previews never round-trip back from browser input. The exact
         # fingerprinted plan is retained in server memory and consumed once by
         # an apply request carrying its opaque id.
@@ -204,7 +204,7 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
         if folder:
             STATE.root = folder.expanduser().resolve()
         STATE.session_token = secrets.token_urlsafe(32)
-        STATE.duplicate_groups = {}
+        STATE.duplicate_review = DuplicateReview()
         STATE.organize_plan = None
         STATE.organize_busy = False
 
@@ -510,7 +510,7 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                 STATE.cancel = False
                 STATE.maps = None
                 STATE.advice = None
-                STATE.duplicate_groups = {}
+                STATE.duplicate_review = DuplicateReview()
                 STATE.organize_plan = None
                 STATE.scan_generation += 1
 
@@ -781,85 +781,26 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
             return {"ok": True, "n": len(done), "files": done, "skipped": skipped}
 
         def _purge_dupes(self, body: dict[str, Any]) -> dict[str, Any]:
-            group_id = str(body.get("group") or "")
-            known = STATE.duplicate_groups.get(group_id)
-            if not known:
-                return {"ok": False, "error": "duplicate group expired; scan duplicates again"}
-            expected_digest, known_paths = known
-            try:
-                keep = Path(str(body.get("keep") or "")).expanduser().resolve()
-            except OSError as exc:
-                return {"ok": False, "error": str(exc)}
-            if keep not in known_paths or not keep.is_file():
-                return {"ok": False, "error": "the keeper is not in this duplicate group"}
-            # Close the time-of-check/time-of-use gap: if any file changed since
-            # preview, delete nothing and ask for a fresh duplicate scan.
-            for path in known_paths:
-                try:
-                    if not path.is_file() or file_sha256(path) != expected_digest:
-                        return {"ok": False, "error": "a file changed; scan duplicates again"}
-                except OSError:
-                    return {"ok": False, "error": "a file changed; scan duplicates again"}
-            for path in known_paths:
-                if path == keep:
-                    continue
-                safe, _reason = _safe_desktop_delete(path, STATE.advice)
-                if not safe:
-                    return {
-                        "ok": False,
-                        "error": "duplicate extras are Review items; reveal them and decide in your file manager",
-                    }
-            done = []
-            skipped = []
-            for path in known_paths:
-                if path == keep:
-                    continue
-                if not STATE.allowed(path) or is_protected(path) or dangerous_target(path):
-                    skipped.append({"path": str(path), "error": "protected"})
-                    continue
-                try:
-                    done.append({"path": str(path), "action": _trash(path)})
-                except OSError as exc:
-                    skipped.append({"path": str(path), "error": str(exc)})
-            STATE.duplicate_groups.pop(group_id, None)
-            return {"ok": True, "n": len(done), "files": done, "skipped": skipped}
+            return STATE.duplicate_review.purge(body, self._duplicate_policy, _trash)
+
+        def _duplicate_policy(self, path: Path) -> tuple[bool, str]:
+            if not STATE.allowed(path):
+                return False, "Outside the scanned folder."
+            return _safe_desktop_delete(path, STATE.advice)
 
         def _do_dupes(self, body: dict[str, Any]) -> dict[str, Any]:
-            folder = Path(str(body.get("path") or (STATE.root or ""))).expanduser()
-            if not folder.is_dir():
-                return {"ok": False, "error": "not a directory"}
+            if STATE.status != "done" or not STATE.root:
+                return {"ok": False, "error": "Complete a folder scan first."}
             try:
-                folder = folder.resolve()
-            except OSError as exc:
+                folder = Path(str(body.get("path") or STATE.root)).expanduser().resolve(strict=True)
+            except (OSError, RuntimeError) as exc:
                 return {"ok": False, "error": str(exc)}
-            if not STATE.allowed(folder):
-                return {"ok": False, "error": "scan this folder first"}
-            min_size = int(body.get("min_size") or 256_000)
-            min_size = max(1, min(min_size, 10 * 1024 * 1024 * 1024))
-            groups = find_duplicates(folder, recursive=True, min_size=min_size, show_progress=False, use_cache=True)
-            payload = []
-            STATE.duplicate_groups = {}
-            for digest, paths in sorted(groups.items(), key=lambda kv: -len(kv[1]))[:40]:
-                resolved_paths = tuple(path.resolve() for path in paths)
-                keeper = choose_keeper(list(resolved_paths), keep="largest")
-                group_id = digest[:16]
-                STATE.duplicate_groups[group_id] = (digest, resolved_paths)
-                payload.append(
-                    {
-                        "group": group_id,
-                        "count": len(resolved_paths),
-                        "keep": str(keeper),
-                        "files": [{"path": str(p), "name": p.name, "label": format_size(p.stat().st_size) if p.exists() else "?"} for p in resolved_paths],
-                    }
-                )
-            reclaim, n = reclaimable_bytes(groups, keep="largest")
-            return {
-                "ok": True,
-                "groups": payload,
-                "reclaim": reclaim,
-                "reclaim_label": format_size(reclaim),
-                "extra_files": n,
-            }
+            if not folder.is_dir() or not STATE.allowed(folder):
+                return {"ok": False, "error": "Choose a folder inside the completed scan."}
+            minimum = body.get("min_size", 256_000)
+            if type(minimum) is not int or not 1 <= minimum <= 10 * 1024**3:
+                return {"ok": False, "error": "Minimum size must be 1 byte to 10 GiB."}
+            return STATE.duplicate_review.search(folder, minimum, self._duplicate_policy)
 
         def _static(self, url_path: str) -> None:
             rel = "index.html" if url_path in {"", "/"} else url_path.lstrip("/")

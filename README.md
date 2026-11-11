@@ -57,7 +57,7 @@ Do **not** run `pip install file-organizer`: that US-spelled PyPI name belongs t
 - Explainable Delete / Review / Keep advice.
 - Protected-path locks enforced by the local server.
 - Per-launch API token, loopback Host enforcement, exact-Origin checks, restrictive browser headers, and JSON-only mutations.
-- Duplicate hashing with an explicit keeper and immediate pre-action revalidation.
+- Duplicate comparison by content, with relative paths, a selectable keeper, and individual Trash selections. Choose a minimum size under **File tools → Duplicates**, then click **Find duplicates**. Hard-linked paths count as one copy. Only Delete-list files with a single hard link can be selected. Desktop searches leave no hash cache in the scanned folder.
 - Content-fingerprinted desktop organisation: preview and apply are bound to the exact same single-use plan, with all-or-nothing rollback and guarded in-app undo.
 - Read-only clutter audit: loose files, copy-like names, stale loose files, and category rules that claim the same extension. `audit --preview` and the desktop Clutter tab add a dry-run tidy list. Nothing is moved.
 - Explicit local JSON and CSV scan-report export.
@@ -86,7 +86,7 @@ python3 -m file_organiser duplicates ~/Downloads
 python3 -m file_organiser doctor
 ```
 
-Dry-run is the default for destructive CLI workflows. CLI flags can expose actions beyond the guarded desktop interface; read `--help` before applying them.
+For duplicate cleanup, preview explicitly with `duplicates FOLDER --delete-dupes --trash --dry-run`. Removing `--dry-run` requests OS Trash and returns an error if Trash is unavailable. The command rechecks file contents before removal and preserves files with multiple hard links. CLI flags can expose actions beyond the guarded desktop interface; read `--help` before applying them.
 
 ## Safe transaction workflow
 
