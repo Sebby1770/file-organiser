@@ -671,14 +671,15 @@ async function exportReport(format) {
   const href = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = href;
-  link.download = `file-organiser-scan.${format}`;
+  link.download = format === "snapshot" ? "storage-snapshot.json" : `file-organiser-scan.${format}`;
   document.body.append(link);
   link.click();
   link.remove();
   URL.revokeObjectURL(href);
-  statusEl.textContent = `Exported a local ${format.toUpperCase()} report. Paths in it may be sensitive.`;
+  statusEl.textContent = format === "snapshot" ? "Saved a storage snapshot with file type totals for the Storage Review Kit." : `Exported a local ${format.toUpperCase()} report. Paths in it may be sensitive.`;
 }
 
+byId("export-snapshot").addEventListener("click", () => exportReport("snapshot"));
 document.querySelector("#export-json").addEventListener("click", () => exportReport("json"));
 document.querySelector("#export-csv").addEventListener("click", () => exportReport("csv"));
 

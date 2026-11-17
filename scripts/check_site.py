@@ -82,7 +82,7 @@ def check_site(root: Path) -> list[str]:
     pages: dict[Path, PageParser] = {}
     titles: dict[str, Path] = {}
     descriptions: dict[str, Path] = {}
-    for page in sorted(root.glob("*.html")):
+    for page in sorted(root.rglob("*.html")):
         parser = PageParser()
         parser.feed(page.read_text(encoding="utf-8"))
         pages[page] = parser
@@ -165,4 +165,4 @@ if __name__ == "__main__":
         for failure in failures:
             print(f"ERROR: {failure}")
         raise SystemExit(1)
-    print(f"Site checks passed for {len(list(site_root.glob('*.html')))} HTML pages.")
+    print(f"Site checks passed for {len(list(site_root.rglob('*.html')))} HTML pages.")

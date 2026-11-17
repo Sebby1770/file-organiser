@@ -16,6 +16,12 @@ The desktop app does not upload filenames or files. Review and Keep cannot move 
 
 Product site: [sebby1770.github.io/file-organiser](https://sebby1770.github.io/file-organiser/)
 
+## Storage Review Kit
+
+[Try a project handoff with sample data](https://sebby1770.github.io/file-organiser/review-kit/). The separate offline kit compares two project snapshots, checks an archive budget, and exports a printable HTML report without filenames or local paths. It works directly from a folder in desktop Chromium or from the desktop app’s **Export storage snapshot** action. Downloading a snapshot is explicit, and a comparison uses two scans from the same method.
+
+Build the standalone delivery ZIP with `python3 scripts/build_review_kit.py`, extract it and open **Storage Review Kit.html**. It includes example snapshots, a quick start and the licence. See the [seller setup](review-kit/SELLER.md) for delivery and checkout configuration.
+
 ## Current distribution status
 
 The website checks GitHub Releases live. Do not assume a packaged download exists merely because CI built an artifact.

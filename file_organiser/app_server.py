@@ -319,16 +319,19 @@ def serve_app(host: str = "127.0.0.1", port: int = 8765, folder: Path | None = N
                 if not result or not advice:
                     self._json({"ok": False, "error": "scan a folder first"})
                     return
-                from .scan_report import build_scan_report, report_csv, report_json
+                from .scan_report import build_scan_report, report_csv, report_json, storage_snapshot
 
-                payload = build_scan_report(result, advice)
                 report_format = qs.get("format", "json").lower()
+                if report_format == "snapshot":
+                    self._download(report_json(storage_snapshot(result)), "application/json; charset=utf-8", "storage-snapshot.json")
+                    return
+                payload = build_scan_report(result, advice)
                 if report_format == "csv":
                     self._download(report_csv(payload), "text/csv; charset=utf-8", "file-organiser-scan.csv")
                 elif report_format == "json":
                     self._download(report_json(payload), "application/json; charset=utf-8", "file-organiser-scan.json")
                 else:
-                    self._json({"ok": False, "error": "format must be json or csv"})
+                    self._json({"ok": False, "error": "format must be json, csv or snapshot"})
                 return
             self._static(path)
 

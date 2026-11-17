@@ -10,6 +10,7 @@ import sys
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -289,6 +290,7 @@ def scan_usage(
         "label": format_size(total),
         "files": dir_files.get(root, 0),
         "visited": visited,
+        "captured_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "errors": errors,
         "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
         "tree": tree,
