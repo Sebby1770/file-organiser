@@ -18,9 +18,13 @@ File Organiser is currently an MIT-licensed source preview. Existing MIT release
 - Intended paid-support target: first response within two business days. This is not a resolution or uptime SLA.
 - Business support: defer pricing and sales until signed deployment, support capacity, licence terms, and admin requirements are real.
 
-Checkout is deliberately absent. Early access uses a public GitHub issue template and must warn people not to submit sensitive file or payment data.
+Desktop Supporter checkout is deliberately absent. Early access uses a public GitHub issue template and must warn people not to submit sensitive file or payment data.
 
-## Launch gates
+## Separate downloadable product
+
+The Storage Review Kit is a separate project-handoff deliverable for freelance editors, photographers and studios. It can be evaluated in the public sample report, delivered as a standalone ZIP, and used without a desktop binary. Its MIT licence is included. The [seller setup](review-kit/SELLER.md) covers the offer, checkout link and a practical pilot. Desktop Supporter pricing, signing and release promises apply only to that desktop offer.
+
+## Desktop launch gates
 
 1. Publish at least one durable GitHub Release with checksums and accurate OS/architecture notes.
 2. Complete signing/notarisation and clean-machine launch tests for every OS sold as supported.

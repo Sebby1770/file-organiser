@@ -209,33 +209,15 @@ def test_symlink_mode(tmp_path: Path):
     assert link.read_bytes() == b"jpg-data"
 
 
-def test_trash_flag_falls_back_without_send2trash(tmp_path: Path, capsys):
-    from file_organiser.duplicates import find_and_report_duplicates
+def test_requested_trash_fails_closed_when_unavailable(tmp_path: Path, capsys):
+    from file_organiser.cli import main
 
     (tmp_path / "a.txt").write_text("dup", encoding="utf-8")
     (tmp_path / "b.txt").write_text("dup", encoding="utf-8")
-
-    console = Console(force_terminal=False)
-
-    with mock.patch(
-        "file_organiser.duplicates.send2trash_available", return_value=False
-    ):
-        find_and_report_duplicates(
-            tmp_path,
-            console,
-            recursive=False,
-            delete_dupes=True,
-            keep="oldest",
-            dry_run=False,
-            use_trash=True,
-            use_cache=False,
-        )
-
-    out = capsys.readouterr().out
-    assert "send2trash" in out.lower() or "warning" in out.lower()
-    # One of the two should be permanently deleted
-    remaining = list(tmp_path.glob("*.txt"))
-    assert len(remaining) == 1
+    with mock.patch("file_organiser.duplicates.send2trash_available", return_value=False):
+        assert main(["duplicates", str(tmp_path), "--delete-dupes", "--trash"]) != 0
+    assert "Trash is unavailable" in capsys.readouterr().out
+    assert {p.name for p in tmp_path.glob("*.txt")} == {"a.txt", "b.txt"}
 
 
 def test_delete_path_without_trash(tmp_path: Path):

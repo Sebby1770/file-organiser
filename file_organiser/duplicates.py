@@ -4,6 +4,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
+import tempfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -26,6 +28,7 @@ KeepPolicy = Literal["oldest", "newest", "largest"]
 
 # Stats for tests / callers that want to inspect cache effectiveness
 CacheStats = Dict[str, int]
+FileIdentity = Tuple[int, int, int, int, int]
 
 
 def default_workers() -> int:
@@ -56,25 +59,46 @@ def send2trash_available() -> bool:
 
 
 def delete_path(path: Path, *, use_trash: bool = False) -> str:
-    """Delete *path*, optionally via OS trash.
-
-    Returns the action taken: ``"trashed"`` or ``"deleted"``.
-
-    When *use_trash* is True and send2trash is installed, moves to trash.
-    Otherwise permanently deletes (caller should warn when trash was requested
-    but unavailable).
-    """
-    if use_trash and send2trash_available():
-        from send2trash import send2trash
-
-        send2trash(str(path))
+    """Carry out the requested removal. A failed Trash operation raises OSError."""
+    if use_trash:
+        try:
+            from send2trash import send2trash
+            send2trash(str(path))
+        except Exception as exc:
+            raise OSError("OS Trash is unavailable or refused this file") from exc
         return "trashed"
     path.unlink()
     return "deleted"
 
 
+def _identity(path: Path) -> FileIdentity:
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise OSError(f"No longer a regular file: {path}")
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
+def verify_copies(paths: Sequence[Path], digest: str) -> Dict[Path, FileIdentity]:
+    """Re-read the group before a destructive operation, ignoring cached hashes."""
+    verified = {}
+    for path in paths:
+        if path.resolve(strict=True) != path:
+            raise OSError(f"File path changed: {path}")
+        before = _identity(path)
+        if file_sha256(path) != digest or _identity(path) != before:
+            raise OSError(f"File changed since duplicate scan: {path}")
+        verified[path] = before
+    return verified
+
+
+def check_copy(path: Path, verified: Dict[Path, FileIdentity]) -> None:
+    """Check for changes to a keeper or candidate since the group was re-read."""
+    if path.resolve(strict=True) != path or _identity(path) != verified[path]:
+        raise OSError(f"File changed since verification: {path}")
+
+
 class HashCache:
-    """Persist path → (mtime, size, sha256) for fast re-runs of duplicate scans.
+    """Persist SHA-256 hashes with file identity and timestamps for repeat scans.
 
     Cache lives at ``folder / .organizer_hash_cache.json``.
     """
@@ -89,7 +113,7 @@ class HashCache:
         self._load()
 
     def _load(self) -> None:
-        if not self.path.exists():
+        if self.path.is_symlink() or not self.path.is_file():
             return
         try:
             with self.path.open("r", encoding="utf-8") as f:
@@ -101,59 +125,47 @@ class HashCache:
                 self._entries = {
                     k: v for k, v in data.items() if isinstance(v, dict)
                 }
-        except (json.JSONDecodeError, OSError):
+        except (UnicodeError, json.JSONDecodeError, OSError):
             self._entries = {}
 
     def save(self) -> None:
-        payload = {
-            "version": 1,
-            "entries": self._entries,
-        }
+        temp_name = None
         try:
-            with self.path.open("w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2)
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.folder,
+                                             prefix=".organizer-hashes-", delete=False) as handle:
+                temp_name = handle.name
+                json.dump({"version": 2, "entries": self._entries}, handle)
+            os.replace(temp_name, self.path)
         except OSError:
-            pass
+            pass  # A read-only folder can still be scanned.
+        finally:
+            if temp_name is not None:
+                try:
+                    Path(temp_name).unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def get(self, path: Path) -> Optional[str]:
-        """Return cached sha256 if mtime+size still match, else None."""
-        key = str(path.resolve()) if path.exists() else str(path)
+        """Older cache records without an identity are ordinary misses."""
+        rec = self._entries.get(str(path.absolute()))
         try:
-            st = path.stat()
-            mtime = st.st_mtime
-            size = st.st_size
+            if isinstance(rec, dict) and rec.get("identity") == list(_identity(path)):
+                digest = rec.get("sha256")
+                if isinstance(digest, str) and len(digest) == 64:
+                    self.hits += 1
+                    return digest
         except OSError:
-            return None
-        rec = self._entries.get(key)
-        if not rec:
-            # Try non-resolved path key as fallback
-            rec = self._entries.get(str(path))
-        if not rec:
-            self.misses += 1
-            return None
-        try:
-            if float(rec["mtime"]) == float(mtime) and int(rec["size"]) == int(size):
-                digest = str(rec["sha256"])
-                self.hits += 1
-                return digest
-        except (KeyError, TypeError, ValueError):
             pass
         self.misses += 1
         return None
 
-    def put(self, path: Path, digest: str) -> None:
+    def put(self, path: Path, digest: str, identity: Optional[FileIdentity] = None) -> None:
         try:
-            st = path.stat()
-            mtime = st.st_mtime
-            size = st.st_size
+            self._entries[str(path.absolute())] = {
+                "identity": list(identity or _identity(path)), "sha256": digest,
+            }
         except OSError:
-            return
-        key = str(path.resolve())
-        self._entries[key] = {
-            "mtime": mtime,
-            "size": size,
-            "sha256": digest,
-        }
+            pass
 
     def stats(self) -> CacheStats:
         return {"hits": self.hits, "misses": self.misses, "entries": len(self._entries)}
@@ -169,9 +181,12 @@ def _hash_safe(
         if cached is not None:
             return path, cached
     try:
+        before = _identity(path)
         digest = file_sha256(path)
+        if _identity(path) != before:
+            return path, None
         if cache is not None:
-            cache.put(path, digest)
+            cache.put(path, digest, before)
         return path, digest
     except OSError:
         return path, None
@@ -194,7 +209,7 @@ def find_duplicates(
     """Find duplicate files by SHA-256 content hash.
 
     Uses a thread pool for parallel hashing and an optional on-disk hash cache
-    keyed by path + mtime + size. Returns only groups with 2+ files, keyed by hash.
+    keyed by file identity, size and timestamps. Returns only groups with 2+ files, keyed by hash.
     """
     files = iter_files(
         folder,
@@ -270,7 +285,7 @@ def find_duplicates(
     if active_cache is not None:
         active_cache.save()
 
-    return {h: paths for h, paths in by_hash.items() if len(paths) >= 2}
+    return {h: sorted(paths) for h, paths in by_hash.items() if len(paths) >= 2}
 
 
 def _mtime(path: Path) -> float:
@@ -295,35 +310,33 @@ def choose_keeper(paths: List[Path], keep: KeepPolicy = "oldest") -> Path:
     return min(paths, key=_mtime)
 
 
+def _removable_copies(paths: List[Path], keeper: Path) -> Dict[Path, int]:
+    """Only separate regular files can reclaim their listed bytes."""
+    extras = {}
+    for path in paths:
+        if path == keeper:
+            continue
+        try:
+            info = path.lstat()
+        except OSError:
+            continue
+        if stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+            extras[path] = info.st_size
+    return extras
+
+
 def reclaimable_bytes(
     groups: Dict[str, List[Path]],
     *,
     keep: KeepPolicy = "oldest",
 ) -> Tuple[int, int]:
-    """Compute reclaimable space if all but the keeper were deleted.
-
-    Returns ``(total_reclaimable_bytes, file_count_that_could_be_removed)``.
-    Size is taken from the non-keeper files (same content as keeper, so
-    each extra copy's size counts fully).
-    """
-    total = 0
-    count = 0
+    """Return the logical bytes and file count eligible for removal."""
+    total = count = 0
     for paths in groups.values():
-        if len(paths) < 2:
-            continue
-        keeper = choose_keeper(paths, keep=keep)
-        for path in paths:
-            if path == keeper:
-                continue
-            try:
-                total += path.stat().st_size
-            except OSError:
-                # Fall back to keeper size if dupe unreadable
-                try:
-                    total += keeper.stat().st_size
-                except OSError:
-                    pass
-            count += 1
+        if len(paths) >= 2:
+            extras = _removable_copies(paths, choose_keeper(paths, keep=keep))
+            total += sum(extras.values())
+            count += len(extras)
     return total, count
 
 
@@ -345,9 +358,7 @@ def find_and_report_duplicates(
 ) -> int:
     """Find duplicates, print a table, optionally delete extras.
 
-    When *use_trash* is True and send2trash is available, duplicates are moved
-    to the OS trash instead of permanent delete. If trash was requested but
-    send2trash is missing, falls back to permanent delete with a warning.
+    Trash requests fail closed if the OS Trash is unavailable.
 
     Returns the number of duplicate groups found.
     """
@@ -355,6 +366,9 @@ def find_and_report_duplicates(
         console.print(f"[red]Error:[/red] '{folder}' is not a valid directory.")
         return 0
 
+    folder = folder.resolve()
+    if delete_dupes and use_trash and not dry_run and not send2trash_available():
+        raise OSError("OS Trash is unavailable. Install send2trash to move duplicates to Trash.")
     console.print(f"Scanning for duplicates in [cyan]{folder}[/cyan] ...")
     cache = HashCache(folder) if use_cache else None
     groups = find_duplicates(
@@ -408,32 +422,33 @@ def find_and_report_duplicates(
     if not delete_dupes:
         return len(groups)
 
-    trash_ok = send2trash_available()
-    actually_trash = bool(use_trash and trash_ok)
-    if use_trash and not trash_ok:
-        console.print(
-            "[yellow]Warning:[/yellow] send2trash not installed — "
-            "permanently deleting instead.\n"
-            "  Install: [bold]pip install file-organiser[trash][/bold]"
-        )
-
     deleted = 0
     errors: List[str] = []
     mode_tag = "[yellow](dry-run)[/yellow] " if dry_run else ""
-    action_word = "trash" if actually_trash else "delete"
+    action_word = "trash" if use_trash else "delete"
     console.print(f"{mode_tag}{action_word.capitalize()}ing duplicates (keeping {keep})...")
 
     for digest, paths in groups.items():
         keeper = choose_keeper(paths, keep=keep)
-        for path in paths:
-            if path == keeper:
-                continue
+        extras = _removable_copies(paths, keeper)
+        if not extras:
+            continue
+        try:
+            verified = {} if dry_run else verify_copies(paths, digest)
+        except (OSError, RuntimeError) as exc:
+            errors.append(str(exc))
+            continue
+        for path in extras:
             try:
                 if dry_run:
-                    verb = "would trash" if actually_trash else "would delete"
+                    verb = "would trash" if use_trash else "would delete"
                     console.print(f"  [dim]{verb}[/dim] {path}")
                 else:
-                    action = delete_path(path, use_trash=actually_trash)
+                    check_copy(keeper, verified)
+                    check_copy(path, verified)
+                    if path.lstat().st_nlink != 1:
+                        raise OSError(f"Hard-linked copy must be reviewed: {path}")
+                    action = delete_path(path, use_trash=use_trash)
                     color = "yellow" if action == "trashed" else "red"
                     console.print(f"  [{color}]{action}[/{color}] {path}")
                 deleted += 1
@@ -441,13 +456,11 @@ def find_and_report_duplicates(
                 errors.append(f"{path}: {e}")
 
     if dry_run:
-        verb = "trash" if actually_trash else "delete"
+        verb = "trash" if use_trash else "delete"
         console.print(f"[yellow]Dry run:[/yellow] would {verb} {deleted} file(s).")
     else:
-        verb = "Trashed" if actually_trash else "Deleted"
+        verb = "Trashed" if use_trash else "Deleted"
         console.print(f"[green]✓[/green] {verb} {deleted} duplicate file(s).")
     if errors:
-        console.print(f"[red]Encountered {len(errors)} error(s):[/red]")
-        for err in errors:
-            console.print(f"  [red]•[/red] {err}")
+        raise OSError(f"{len(errors)} duplicate cleanup error(s). {deleted} removed. First error: {errors[0]}")
     return len(groups)

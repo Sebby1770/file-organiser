@@ -171,3 +171,39 @@ def test_live_local_server_rejects_rebinding_and_unauthorized_posts():
         body="{}",
     )
     assert status == 200
+
+
+def test_scan_does_not_offer_empty_markers_or_folders_for_trash(tmp_path):
+    from file_organiser.advise import build_advice
+    from file_organiser.disk import scan_usage
+
+    marker = tmp_path / "project.marker"
+    marker.touch()
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    advice = build_advice(scan_usage(tmp_path)[0])
+    assert {row["name"] for row in advice["review"]} == {"empty", "project.marker"}
+    assert not _safe_desktop_delete(marker, advice)[0]
+    assert not _safe_desktop_delete(empty, advice)[0]
+
+
+def test_replaced_cleanup_row_cannot_authorise_another_target(tmp_path):
+    from file_organiser.advise import build_advice
+    from file_organiser.disk import scan_usage
+
+    junk = tmp_path / "Thumbs.db"
+    junk.write_text("junk")
+    personal = tmp_path / "notes.txt"
+    personal.write_text("keep")
+    advice = build_advice(scan_usage(tmp_path)[0])
+    assert _safe_desktop_delete(junk, advice)[0]
+    junk.unlink()
+    junk.mkdir()
+    assert not _safe_desktop_delete(junk, advice)[0]
+    junk.rmdir()
+    try:
+        junk.symlink_to(personal)
+    except OSError:
+        pytest.skip("creating symlinks is unavailable")
+    assert not _safe_desktop_delete(personal, advice)[0]
+    assert not _safe_desktop_delete(junk, advice)[0]

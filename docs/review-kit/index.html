@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Compare project storage before and after delivery and prepare a client handoff report with File Organiser.">
+  <meta name="referrer" content="no-referrer">
+  <!-- demo-meta-start -->
+  <link rel="canonical" href="https://sebby1770.github.io/file-organiser/review-kit/">
+  <meta property="og:title" content="Storage Review Kit · File Organiser">
+  <meta property="og:description" content="Compare project deliveries and send a client-ready storage report. Try the interactive studio handoff.">
+  <meta property="og:image" content="https://sebby1770.github.io/file-organiser/og.png">
+  <meta property="og:image:alt" content="File Organiser project preview">
+  <meta property="og:url" content="https://sebby1770.github.io/file-organiser/review-kit/">
+  <meta property="og:type" content="website">
+  <meta name="twitter:title" content="Storage Review Kit · File Organiser">
+  <meta name="twitter:description" content="Compare project deliveries and send a client-ready storage report. Try the interactive studio handoff.">
+  <meta name="twitter:image" content="https://sebby1770.github.io/file-organiser/og.png">
+  <meta name="twitter:image:alt" content="File Organiser project preview">
+  <meta name="twitter:card" content="summary_large_image">
+  <!-- demo-meta-end -->
+  <title>Storage Review Kit · File Organiser</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="review.css">
+</head>
+<body data-mode="demo">
+  <header class="mast"><div><span class="mark" aria-hidden="true"></span><b>File Organiser</b></div><span>Storage Review Kit</span></header>
+  <main>
+    <section class="intro"><div><h1>Project storage review</h1><p>See which file types grew between deliveries, check an archive budget, and hand the client a report they can read.</p><a class="jump" href="#report">View report ↓</a></div>
+      <!-- demo-offer-start -->
+      <aside class="offer"><strong>Use it on your own projects</strong><p>The offline kit opens in a browser. Your project folders stay on your device.</p><a id="offer" href="https://github.com/Sebby1770/file-organiser/issues/new?template=pro-early-access.yml&amp;outcome=I%20am%20interested%20in%20the%20offline%20Storage%20Review%20Kit.">Register interest on GitHub ↗</a><small id="offer-note">Public interest form · no payment taken</small></aside>
+      <!-- demo-offer-end -->
+    </section>
+    <section class="controls" aria-label="Prepare report">
+      <div class="control-heading"><h2>Report setup</h2><button id="reset" type="button">Reset</button></div>
+      <div id="samples"><label>Example project<select id="sample"><option value="film">Film delivery</option><option value="photo">Photo archive</option></select></label><p class="help">Interactive example with fictional project data.</p></div>
+      <!-- offline-controls-start -->
+      <div id="inputs" hidden>
+        <div class="load-row"><b>Current snapshot</b><label class="file-control">Scan a folder<input type="file" id="folder" webkitdirectory multiple></label><label class="file-control">Open snapshot<input type="file" id="current-file" accept=".json,application/json"></label></div>
+        <div class="load-row"><b>Earlier snapshot</b><label class="file-control">Compare with saved snapshot<input type="file" id="baseline-file" accept=".json,application/json"></label><button type="button" id="remove-baseline">Clear comparison</button></div>
+        <p class="help">Choose snapshots from the same project. You can also export a storage snapshot from the desktop app. Folder scans use names and sizes supplied by your browser and skip hidden entries.</p>
+      </div>
+      <!-- offline-controls-end -->
+      <div class="fields"><label>Project label<input id="project" maxlength="80" placeholder="e.g. Autumn campaign"></label>
+        <label><span>Prepared by <small>(optional)</small></span><input id="studio" maxlength="80" placeholder="Studio or team"></label>
+        <label><span>Archive budget <small>(GiB, optional)</small></span><input id="budget" type="number" min="0.01" max="1000000000" step="any" inputmode="decimal" placeholder="e.g. 120"></label></div>
+      <p id="status" role="status"></p>
+    </section>
+    <article id="report" aria-label="Shareable storage report">
+      <header class="report-head"><div><p class="kicker" id="report-kind">Storage review</p><h2 id="report-name">Project handoff</h2><p id="byline"></p></div><p id="date"></p></header>
+      <p id="empty">Choose a folder or open a storage snapshot to start the report.</p>
+      <div id="report-body" hidden>
+        <div class="metrics"><div><span>Current storage</span><strong id="total"></strong><small id="count"></small></div><div><span>Change since baseline</span><strong id="delta"></strong><small id="baseline-date"></small></div><div><span>Archive budget</span><strong id="headroom"></strong><small id="budget-caption"></small></div></div>
+        <p id="finding"></p><p id="coverage" hidden></p>
+        <table><caption>File type breakdown</caption><thead><tr><th>File type</th><th>Current size</th><th>Change</th><th>Files now</th></tr></thead><tbody id="breakdown"></tbody></table>
+        <p class="footnote" id="scope"></p>
+      </div>
+    </article>
+    <div class="actions"><button id="download" class="primary" disabled>Download report</button><button id="print" disabled>Print / PDF</button><button id="snapshot" hidden disabled>Save current snapshot</button></div>
+    <p class="help">The shareable report includes your labels, dates, category totals and budget. It omits individual filenames and folder paths. When printing, turn off browser headers and footers to omit the page location.</p>
+  </main>
+  <script src="offer.js"></script>
+  <script src="review.js"></script>
+</body>
+</html>

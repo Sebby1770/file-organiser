@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import __version__
+from .rules import DEFAULT_RULES, OTHER_CATEGORY
 
 
 def build_scan_report(result: dict[str, Any], advice: dict[str, Any]) -> dict[str, Any]:
@@ -43,6 +44,23 @@ def build_scan_report(result: dict[str, Any], advice: dict[str, Any]) -> dict[st
         "summary": dict(advice.get("summary") or {}),
         "items": rows,
         "privacy": "Created locally. Paths may be sensitive; share this file only if you intend to.",
+    }
+
+
+def storage_snapshot(result: dict[str, Any]) -> dict[str, Any]:
+    """Export only counts and logical sizes under public, built-in category names."""
+    groups: dict[str, dict[str, Any]] = {}
+    for row in result["categories"]:
+        name = row["category"] if row["category"] in DEFAULT_RULES else OTHER_CATEGORY
+        group = groups.setdefault(name, {"type": name, "bytes": 0, "files": 0})
+        group["bytes"] += row["size"]
+        group["files"] += row["files"]
+    return {
+        "schema": "file-organiser.storage-snapshot.v1",
+        "source": "desktop",
+        "captured": result["captured_at"],
+        "errors": result["errors"],
+        "groups": sorted(groups.values(), key=lambda group: group["type"]),
     }
 
 
